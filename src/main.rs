@@ -65,8 +65,14 @@ impl JsonStorage {
     }
     
     /// Add a new calculation to the database
-    fn add_calculation(&self, base_name: &String, command_string: & String ) {
+    fn add_calculation(&mut self, base_name: &String, command_string: & String ) {
         
+        // validate input
+        if self.calculation_nodes.contains_key(base_name) {
+            panic!("Trying to add a calculation with a name that already exists. Aborting. Nothing being written to the database.")
+        }
+
+
         // Extract inputs and outputs
         let input_re = Regex::new(r"input\((.*?)\)").expect("failed at creating a regular expression.");
         let output_re = Regex::new(r"output\((.*?)\)").expect("Failed at creating regulary expression."); // Match 'output(file)'
@@ -81,16 +87,55 @@ impl JsonStorage {
             .map(|cap| cap[1].to_string()) // Get the file name without 'input()'
             .collect();
 
+
         // Format the command string
-
+        
         let mut final_command = command_string.clone();
-
+        
         for (i, value) in inputs.iter().enumerate() {
             final_command = final_command.replace(&format!("input({})",value), &format!("input_{}", i));
         }
         
         for (i, value) in outputs.iter().enumerate() {
             final_command = final_command.replace(&format!("output({})",value), &format!("output_{}", i));
+        }
+
+        
+        let calculation_manager = CalculationManager{inputs: inputs.clone(), outputs: outputs.clone(), program: final_command};
+        let calculation_node = CalculationNode{calculation: calculation_manager, copy:CopyManager::default(), git_hash: "".to_string(), tags:Vec::new()};
+        self.calculation_nodes.insert(base_name.to_string(), calculation_node);
+        
+        
+        // Create all the data nodes.
+        for input in inputs.clone() {
+            let data_node = DataNode{save: false, tags: Vec::new(), copy: CopyManager::default()};
+            self.data_nodes.insert(input, data_node);
+        }
+
+        for output in outputs.clone() {
+            let data_node = DataNode{save: false, tags: Vec::new(), copy: CopyManager::default()};
+            self.data_nodes.insert(output, data_node);
+        }
+
+    }
+
+    /// Inspect a node for further information
+    fn inspect(& self, name: &String){
+        
+        // check if it's a calculation node or a data node
+
+        let in_calculation = self.calculation_nodes.contains_key(name);
+        let in_data_node = self.data_nodes.contains_key(name);
+
+        if !in_data_node & !in_calculation {
+            panic!("Value '{}' not found in calculation or data nodes", name);
+        }
+
+        if in_calculation {
+            println!("Calculation node:{}.", name);
+        }
+        else {
+            println!("Data node: {}.", name);
         }
 
     }
@@ -125,6 +170,7 @@ enum Commands {
     Init,
     ReadData,
     AddCalculation {name: String, command : String},
+    Inspect {name: String},
 
 }
 
@@ -153,10 +199,15 @@ fn main() {
             println!("{}", serde_json::to_string(&db).expect("failed to seriazile the code"));
         }
         Commands::AddCalculation {name, command} => {
-            let db = read_json_file("test.json").expect("Failed to read the database");
-            db.add_calculation(name, command);
+            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            db.add_calculation(&name, &command);
             db.write_database(&"test.json".to_string()).expect("failed to write the database.")
         }
-    
+        
+        Commands::Inspect {name} => {
+            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            db.inspect(&name);
+        }
+
     }
 }

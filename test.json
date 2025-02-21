@@ -1,26 +1,113 @@
 {
   "calculation_nodes": {
+    "teaoeust": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "hello",
+          "this"
+        ],
+        "outputs": [],
+        "program": "python3 input_0 input_1"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "euoaoeueuteaoeust": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "hello",
+          "thisthat"
+        ],
+        "outputs": [],
+        "program": "python3 input_0 input_1"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "oeuteaoeust": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "hello",
+          "this"
+        ],
+        "outputs": [],
+        "program": "python3 input_0 input_1"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "oaoeueuteaoeust": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "hello",
+          "this"
+        ],
+        "outputs": [],
+        "program": "python3 input_0 input_1"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
     "test": {
       "git_hash": "",
       "tags": [],
       "calculation": {
         "inputs": [
-          "input_1"
+          "hello",
+          "this"
         ],
-        "outputs": [
-          "output_2"
-        ],
-        "program": "python3 input_1 output_2"
+        "outputs": [],
+        "program": "python3 input_0 input_1"
       },
       "copy": {
-        "name": "test",
-        "origin": "another_test"
+        "name": "",
+        "origin": ""
       }
     }
   },
   "data_nodes": {
     "test_data": {
       "save": true,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "this": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "hello": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "thisthat": {
+      "save": false,
       "tags": [],
       "copy": {
         "name": "",
