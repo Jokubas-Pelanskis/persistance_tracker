@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, Write, Read};
 use std::collections::HashMap;
 use regex::Regex;
-
+use std::fmt;
 // Create a new database stucture for storing all the json data
 
 
@@ -14,6 +14,23 @@ struct CalculationManager {
     inputs: Vec<String>,
     outputs: Vec<String>,
     program: String
+}
+
+
+impl CalculationManager {
+    /// Generate the command to run the calculation.
+    fn get_full_program(& self) -> String {
+        let mut final_command = self.program.clone();
+
+        for (i, value) in self.outputs.iter().enumerate() {
+            final_command = final_command.replace(&format!("output_{}", i), value);
+        }
+        for (i, value) in self.inputs.iter().enumerate() {
+            final_command = final_command.replace(&format!("input_{}", i),value);
+        }
+        final_command
+
+    }
 }
 
 
@@ -32,6 +49,18 @@ struct CalculationNode {
     calculation: CalculationManager,
     copy: CopyManager,
 }
+
+impl fmt::Display for CalculationNode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), std::fmt::Error>{
+
+        let full_program = self.calculation.get_full_program();
+
+        write!(f, "generic program: \n{} \nfull program:\n{}\n", self.calculation.program, full_program)
+    }
+}
+
+
+
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct DataNode {
@@ -75,7 +104,7 @@ impl JsonStorage {
 
         // Extract inputs and outputs
         let input_re = Regex::new(r"input\((.*?)\)").expect("failed at creating a regular expression.");
-        let output_re = Regex::new(r"output\((.*?)\)").expect("Failed at creating regulary expression."); // Match 'output(file)'
+        let output_re: Regex = Regex::new(r"output\((.*?)\)").expect("Failed at creating regulary expression."); // Match 'output(file)'
         
         let inputs: Vec<String> = input_re
             .captures_iter(command_string)
@@ -99,12 +128,22 @@ impl JsonStorage {
         for (i, value) in outputs.iter().enumerate() {
             final_command = final_command.replace(&format!("output({})",value), &format!("output_{}", i));
         }
+        
+
+        // Check the final command
+        // If the final command contains () - panic and crash. Most likely mispelled input
+        if final_command.contains("(") | final_command.contains(")") {
+            panic!("Found '(' or ')' in the final command - most likely mispelled 'input' or 'output'.")
+        }
 
         
         let calculation_manager = CalculationManager{inputs: inputs.clone(), outputs: outputs.clone(), program: final_command};
-        let calculation_node = CalculationNode{calculation: calculation_manager, copy:CopyManager::default(), git_hash: "".to_string(), tags:Vec::new()};
-        self.calculation_nodes.insert(base_name.to_string(), calculation_node);
         
+        let calculation_node = CalculationNode{calculation: calculation_manager, copy:CopyManager::default(), git_hash: "".to_string(), tags:Vec::new()};
+        println!("Adding to the database:");
+        println!("{}", calculation_node);
+        
+        self.calculation_nodes.insert(base_name.to_string(), calculation_node);
         
         // Create all the data nodes.
         for input in inputs.clone() {
@@ -116,6 +155,8 @@ impl JsonStorage {
             let data_node = DataNode{save: false, tags: Vec::new(), copy: CopyManager::default()};
             self.data_nodes.insert(output, data_node);
         }
+        
+
 
     }
 
@@ -132,7 +173,8 @@ impl JsonStorage {
         }
 
         if in_calculation {
-            println!("Calculation node:{}.", name);
+            println!("Calculation node:{}", name);
+            println!("{}", self.calculation_nodes.get(name).expect("Failed to generate representation."));
         }
         else {
             println!("Data node: {}.", name);
@@ -166,10 +208,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Adds files to myapp
+    /// Create minimal database that can serve as a strarting point.
     Init,
+    /// Read all the data and print it
     ReadData,
+    /// Add a calculation to the database.
     AddCalculation {name: String, command : String},
+    /// Inspect a node
     Inspect {name: String},
 
 }
