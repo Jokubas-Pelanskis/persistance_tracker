@@ -1,68 +1,59 @@
-use clap::Parser;
+use clap::{Parser,Subcommand};
 use serde::{Serialize, Deserialize};
 use std::fs::File;
 use std::io::{self, Write, Read};
 use std::collections::HashMap;
-
+use regex::Regex;
 
 // Create a new database stucture for storing all the json data
 
 
 /// Manages inputs, outputs and the command to run
-#[derive(Serialize, Deserialize, Debug)]
-struct CalculationManager {}
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct CalculationManager {
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+    program: String
+}
 
 
 /// Manages copy history 
-#[derive(Serialize, Deserialize, Debug)]
-struct CopyManager {}
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct CopyManager {
+    name: String, // Name of the copy node
+    origin: String // Name of the origin node
+}
 
 /// Describes a calculation node in a graph
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct CalculationNode {
     git_hash: String,
+    tags: Vec<String>, // For stornig things like the experiment or other thigs. 
     calculation: CalculationManager,
     copy: CopyManager,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct DataNode {
     save: bool,
+    tags: Vec<String>,
     copy: CopyManager,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct CopyNode {
-
-}
-
-
-#[derive(Serialize, Deserialize, Debug)]
+/// The main class that defines the whole data storage structure.
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct JsonStorage {
     calculation_nodes: HashMap<String, CalculationNode>,
     data_nodes: HashMap<String, DataNode>,
-    copy_nodes: HashMap<String, CopyNode>,
 }
 
 
-
-
-// Database schema
-#[derive(Serialize, Deserialize, Debug)]
-struct Node {
-    name: String,
-    count: i32,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Database {
-    node_list: Vec<Node>
-}
 
 // implement reading and writing to the database.
-impl Database {
 
-    fn write_database(&mut self, filename: &str) -> Result<(), io::Error>{
+impl JsonStorage {
+
+    fn write_database(&self, filename: &str) -> Result<(), io::Error>{
         let mut file = File::create(filename)?; 
         
         let write_string = match serde_json::to_string_pretty(self){
@@ -73,13 +64,45 @@ impl Database {
         Ok(())
     }
     
+    /// Add a new calculation to the database
+    fn add_calculation(&self, base_name: &String, command_string: & String ) {
+        
+        // Extract inputs and outputs
+        let input_re = Regex::new(r"input\((.*?)\)").expect("failed at creating a regular expression.");
+        let output_re = Regex::new(r"output\((.*?)\)").expect("Failed at creating regulary expression."); // Match 'output(file)'
+        
+        let inputs: Vec<String> = input_re
+            .captures_iter(command_string)
+            .map(|cap| cap[1].to_string()) // Get the file name without 'input()'
+            .collect();
+
+        let outputs: Vec<String> = output_re
+            .captures_iter(command_string)
+            .map(|cap| cap[1].to_string()) // Get the file name without 'input()'
+            .collect();
+
+        // Format the command string
+
+        let mut final_command = command_string.clone();
+
+        for (i, value) in inputs.iter().enumerate() {
+            final_command = final_command.replace(&format!("input({})",value), &format!("input_{}", i));
+        }
+        
+        for (i, value) in outputs.iter().enumerate() {
+            final_command = final_command.replace(&format!("output({})",value), &format!("output_{}", i));
+        }
+
+    }
+
+
 }
 
-fn read_json_file(filename: &str) -> std::io::Result<Database> {
+fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
     let mut file = File::open(filename)?; // Open the file
     let mut contents = String::new();
     file.read_to_string(&mut contents)?; // Read file into a string
-    let db: Database = serde_json::from_str(&contents)?; // Deserialize JSON
+    let db: JsonStorage = serde_json::from_str(&contents)?; // Deserialize JSON
     Ok(db)
 }
 
@@ -88,37 +111,52 @@ fn read_json_file(filename: &str) -> std::io::Result<Database> {
 
 
 /// Command line interface
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(version, about, long_about = None)]
-struct Args {
+struct Cli {
     /// Name of the person to greet
-    #[arg(long)]
-    name: String,
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    /// Number of times to greet
-    #[arg(short, long, default_value_t = 1)]
-    count: i32,
+#[derive(Subcommand)]
+enum Commands {
+    /// Adds files to myapp
+    Init,
+    ReadData,
+    AddCalculation {name: String, command : String},
 
-    #[arg(long)]
-    file: String
 }
 
 
+
 fn main() {
-    // Read the arguments
-    let args: Args = Args::parse();
+    let cli = Cli::parse();
 
+    match &cli.command {
+        Commands::Init  => {
+            let calculation_manager = CalculationManager{inputs:vec!["input_1".to_string()],
+                    outputs: vec!["output_2".to_string()],
+                    program: "python3 input_1 output_2".to_string()};
 
-    // Read the data from a file;
-    let mut db = read_json_file((&args.file)).expect("Failed to read the database. Aborting!");
-
-    // Creat the new node object
-    let node = Node{count: args.count, name: args.name};
-
-    // Extend the database
-    db.node_list.push(node);
-
-    // Write the database to the file
-
-    db.write_database(&args.file).expect("Failed writing to the database.");
+            let copy_manager = CopyManager {name: "test".to_string(), origin: "another_test".to_string()};
+            
+            let mut calculation_nodes = HashMap::new();
+            calculation_nodes.insert("test".to_string(), CalculationNode{git_hash: "".to_string(), tags: Vec::new(), calculation: calculation_manager, copy: copy_manager});
+            let mut data_nodes = HashMap::new();
+            data_nodes.insert("test_data".to_string(), DataNode{save:true, tags:Vec::new(), copy: CopyManager::default()});                                                
+            let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
+            default_struct.write_database(&"test.json".to_string());
+        }
+        Commands::ReadData => {
+            let db = read_json_file("test.json").expect("Failed to read the database");
+            println!("{}", serde_json::to_string(&db).expect("failed to seriazile the code"));
+        }
+        Commands::AddCalculation {name, command} => {
+            let db = read_json_file("test.json").expect("Failed to read the database");
+            db.add_calculation(name, command);
+            db.write_database(&"test.json".to_string()).expect("failed to write the database.")
+        }
+    
+    }
 }
