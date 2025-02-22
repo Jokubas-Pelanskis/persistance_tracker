@@ -5,6 +5,9 @@ use std::io::{self, Write, Read};
 use std::collections::HashMap;
 use regex::Regex;
 use std::fmt;
+// Use the graphing tool
+use petgraph::graph::{NodeIndex, DiGraph};
+use petgraph::dot::{Dot, Config};
 // Create a new database stucture for storing all the json data
 
 
@@ -320,7 +323,7 @@ impl JsonStorage {
     }
 
     /// Returns a filtered with nodes that only have a certain tag.
-    fn select_tag_filtered(& self, external_tag_list: &Vec<String>) -> JsonStorage{
+    fn filter_by_tags(& self, external_tag_list: &Vec<String>) -> JsonStorage{
 
         // create an emtyp object
         let mut filtered_database = JsonStorage::default();
@@ -364,17 +367,38 @@ impl JsonStorage {
 
     }
 
-    /// Convert the visible nodes to 
-    fn generate_graph(& self){
-        // Get the current tags
-        let current_tags = match read_current_file(&CURRENTTAGS){
-            Ok(value)=> value,
-            Err(e) => panic!("{}",e)
-        };
+    /// Covert database to a DiGraph (could be a filtered database) to a graph representation for selection of the graph in other ways and plotting too.
+    fn generate_graph(& self) -> DiGraph::<&str, &str>{
+        
+        let mut graph = DiGraph::<&str, &str>::new(); // initialize the final graph
+        let mut graph_nodes:  HashMap<String, NodeIndex> = HashMap::new(); // node storage thing
+        let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
-        let new_db = self.select_tag_filtered(&current_tags.tags);
+        // Create nodes for the graph
+        for calc_name in self.calculation_nodes.keys() {
+            let gn = graph.add_node(&calc_name);
+            graph_nodes.insert(calc_name.clone(), gn);
+        }
+        for data_name in self.data_nodes.keys() {
+            let gn = graph.add_node(&data_name);
+            graph_nodes.insert(data_name.clone(), gn);
+        }
 
-        println!("{}", serde_json::to_string(&new_db).unwrap())
+
+        // Add edges to the graph
+
+        for (calc_name, calc_node) in self.calculation_nodes.iter() {
+            for inp in &calc_node.calculation.inputs {
+                edges.push((*graph_nodes.get(inp).expect("failed"), *graph_nodes.get(calc_name).expect("failed")));
+            }
+
+            for outp in &calc_node.calculation.outputs {
+                edges.push((*graph_nodes.get(calc_name).expect("failed"), *graph_nodes.get(outp).expect("failed")));
+            }
+        }
+
+        graph.extend_with_edges(&edges);
+        graph
 
     }
 
@@ -411,6 +435,9 @@ struct Cli {
 enum Commands {
     /// Initialize the databse
     Init,
+
+    /// Print the database. Reads the database and directly prints to stdstream.
+    Print {},
     /// Add a calculation to the database.
     AddCalculation {name: String, command : String},
     /// Inspect a node
@@ -432,6 +459,10 @@ enum Commands {
     /// Select a set of nodes for further operation
     Select {
 
+    },
+    /// Visualize the graph
+    Visualize {
+        graph_json: String
     }
 
 }
@@ -456,6 +487,10 @@ fn main() {
             let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
             default_struct.write_database(&JSONDATABASE.to_string());
         }
+        Commands::Print {  } => {
+            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            println!("{}", serde_json::to_string(&db).expect("Failed to seriazile the database for printing."))
+        }
         Commands::AddCalculation {name, command} => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.add_calculation(&name, &command);
@@ -477,7 +512,18 @@ fn main() {
         }
         Commands::Select {  } => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            db.generate_graph();
+            let current_tags = read_current_file(&CURRENTTAGS).expect("Failed reading tags");
+    
+            let new_db = db.filter_by_tags(&current_tags.tags);
+            println!("{}", serde_json::to_string(&new_db).unwrap())
+        }
+        Commands::Visualize { graph_json } => {
+            // let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+
+            // Create the databsae from the given node
+            let db: JsonStorage = serde_json::from_str(&graph_json).expect("Failed to read the the input from the command line.");
+            let graph = db.generate_graph();
+            println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
         }
 
     }
