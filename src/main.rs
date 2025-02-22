@@ -9,7 +9,7 @@ use std::fmt;
 
 
 /// Manages inputs, outputs and the command to run
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default,Clone, Debug)]
 struct CalculationManager {
     inputs: Vec<String>,
     outputs: Vec<String>,
@@ -35,14 +35,14 @@ impl CalculationManager {
 
 
 /// Manages copy history 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default,Clone, Debug)]
 struct CopyManager {
     name: String, // Name of the copy node
     origin: String // Name of the origin node
 }
 
 /// Describes a calculation node in a graph
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default,Clone, Debug)]
 struct CalculationNode {
     git_hash: String,
     tags: Vec<String>, // For stornig things like the experiment or other thigs. 
@@ -60,7 +60,7 @@ impl fmt::Display for CalculationNode {
 }
 
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default,Clone, Debug)]
 struct DataNode {
     save: bool,
     tags: Vec<String>,
@@ -213,7 +213,7 @@ impl JsonStorage {
     /// Note this is only for refencing
     /// 
     /// Other options: 1) dynamic dispatch; 2) Common trait and generics (not sure if this would work, probably would have to know the result an compile time)
-    /// 3) enum
+    /// 3) enum; 4) Or maybe I could change the strucutre, where the hash map I story enums and not classes.
     fn get_node(&self, name: &String) -> Result<Node, String>{
 
         let calculation_branch = self.calculation_nodes.contains_key(name);
@@ -236,7 +236,6 @@ impl JsonStorage {
         }
 
     }
-
 
     /// Add tags to given nodes
     fn add_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>) -> Result<(), String> {
@@ -276,7 +275,6 @@ impl JsonStorage {
         
     }
 
-
     /// Remove tags from the database
     fn remove_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>)-> Result<(), String> {
 
@@ -313,6 +311,56 @@ impl JsonStorage {
 
     }
 
+    /// Returns a filtered with nodes that only have a certain tag.
+    fn select_tag_filtered(& self, external_tag_list: Vec<String>) -> JsonStorage{
+
+        // create an emtyp object
+        let mut filtered_database = JsonStorage::default();
+
+        // iterate through all the calculation_nodes
+        for (node_name, node) in self.calculation_nodes.iter() {
+            let mut overlap = false;
+             // NOTE: this uses the simplest to implement algorithm: Could convert to a hashSet, or maybe sorting two-pointer approach
+            for tag1 in &node.tags {
+                for tag2 in &external_tag_list {
+                    if tag1 == tag2 {
+                        overlap = true;
+                    }
+                }
+            }
+
+            if overlap {
+                filtered_database.calculation_nodes.insert(node_name.to_string(), node.clone());
+            }
+
+        }
+
+        for (node_name, node) in self.data_nodes.iter() {
+            let mut overlap = false;
+             // NOTE: this uses the simplest to implement algorithm: Could convert to a hashSet, or maybe sorting two-pointer approach
+            for tag1 in &node.tags {
+                for tag2 in &external_tag_list {
+                    if tag1 == tag2 {
+                        overlap = true;
+                    }
+                }
+            }
+
+            if overlap {
+                filtered_database.data_nodes.insert(node_name.to_string(), node.clone());
+            }
+        }
+
+        // iterate through all the data nodes
+        filtered_database
+
+    }
+
+    /// Convert the visible nodes to 
+    fn generate_graph(& self){
+
+
+    }
 
 }
 
