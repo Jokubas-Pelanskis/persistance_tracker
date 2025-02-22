@@ -8,6 +8,9 @@ use std::fmt;
 // Create a new database stucture for storing all the json data
 
 
+const JSONDATABASE: &str  = ".graph/graph.json";
+const CURRENTTAGS: &str  = ".graph/current_tags.json";
+
 /// Manages inputs, outputs and the command to run
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
 struct CalculationManager {
@@ -104,6 +107,11 @@ struct JsonStorage {
 enum Node<'a> {
     Calculation(&'a CalculationNode),
     Data(&'a DataNode),
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct CurrentTags {
+    tags:Vec<String>
 }
 
 
@@ -312,7 +320,7 @@ impl JsonStorage {
     }
 
     /// Returns a filtered with nodes that only have a certain tag.
-    fn select_tag_filtered(& self, external_tag_list: Vec<String>) -> JsonStorage{
+    fn select_tag_filtered(& self, external_tag_list: &Vec<String>) -> JsonStorage{
 
         // create an emtyp object
         let mut filtered_database = JsonStorage::default();
@@ -322,7 +330,7 @@ impl JsonStorage {
             let mut overlap = false;
              // NOTE: this uses the simplest to implement algorithm: Could convert to a hashSet, or maybe sorting two-pointer approach
             for tag1 in &node.tags {
-                for tag2 in &external_tag_list {
+                for tag2 in external_tag_list {
                     if tag1 == tag2 {
                         overlap = true;
                     }
@@ -339,7 +347,7 @@ impl JsonStorage {
             let mut overlap = false;
              // NOTE: this uses the simplest to implement algorithm: Could convert to a hashSet, or maybe sorting two-pointer approach
             for tag1 in &node.tags {
-                for tag2 in &external_tag_list {
+                for tag2 in external_tag_list {
                     if tag1 == tag2 {
                         overlap = true;
                     }
@@ -358,7 +366,15 @@ impl JsonStorage {
 
     /// Convert the visible nodes to 
     fn generate_graph(& self){
+        // Get the current tags
+        let current_tags = match read_current_file(&CURRENTTAGS){
+            Ok(value)=> value,
+            Err(e) => panic!("{}",e)
+        };
 
+        let new_db = self.select_tag_filtered(&current_tags.tags);
+
+        println!("{}", serde_json::to_string(&new_db).unwrap())
 
     }
 
@@ -372,7 +388,13 @@ fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
     Ok(db)
 }
 
-
+fn read_current_file(filename: &str) -> std::io::Result<CurrentTags> {
+    let mut file = File::open(filename)?; // Open the file
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?; // Read file into a string
+    let db: CurrentTags = serde_json::from_str(&contents)?; // Deserialize JSON
+    Ok(db)
+}
 
 
 
@@ -387,15 +409,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create minimal database that can serve as a strarting point.
+    /// Initialize the databse
     Init,
-    /// Read all the data and print it
-    ReadData,
     /// Add a calculation to the database.
     AddCalculation {name: String, command : String},
     /// Inspect a node
     Inspect {name: String},
-
     /// add tags to given nodes
     AddTags {
         #[clap(long = "nodes", required = true)]
@@ -403,7 +422,6 @@ enum Commands {
         #[clap(long = "tags", required = true)]
         tags: Vec<String>
     },
-
     /// Remove tags to given nodes
     RemoveTags {
         #[clap(long = "nodes", required = true)]
@@ -411,6 +429,10 @@ enum Commands {
         #[clap(long = "tags", required = true)]
         tags: Vec<String>
     },
+    /// Select a set of nodes for further operation
+    Select {
+
+    }
 
 }
 
@@ -432,30 +454,30 @@ fn main() {
             let mut data_nodes = HashMap::new();
             data_nodes.insert("test_data".to_string(), DataNode{save:true, tags:Vec::new(), copy: CopyManager::default()});                                                
             let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
-            default_struct.write_database(&"test.json".to_string());
-        }
-        Commands::ReadData => {
-            let db = read_json_file("test.json").expect("Failed to read the database");
-            println!("{}", serde_json::to_string(&db).expect("failed to seriazile the code"));
+            default_struct.write_database(&JSONDATABASE.to_string());
         }
         Commands::AddCalculation {name, command} => {
-            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.add_calculation(&name, &command);
-            db.write_database(&"test.json".to_string()).expect("failed to write the database.")
+            db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
         }  
         Commands::Inspect {name} => {
-            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.inspect(&name);
         }
         Commands::AddTags { nodes, tags } => {
-            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.add_tags(&nodes, &tags).expect("Faile to add tags");
-            db.write_database(&"test.json".to_string()).expect("failed to write the database.")
+            db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
         }
         Commands::RemoveTags { nodes, tags } => {
-            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.remove_tags(&nodes, &tags).expect("Faile to add tags");
-            db.write_database(&"test.json".to_string()).expect("failed to write the database.")
+            db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
+        }
+        Commands::Select {  } => {
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            db.generate_graph();
         }
 
     }
