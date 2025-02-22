@@ -60,13 +60,37 @@ impl fmt::Display for CalculationNode {
 }
 
 
-
-
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct DataNode {
     save: bool,
     tags: Vec<String>,
     copy: CopyManager,
+}
+
+
+/// add a trait for adding tags
+trait NodeTags {
+    fn add_tags(&mut self, tag_list:Vec<String>){}
+}
+
+impl NodeTags for DataNode {
+    fn add_tags(&mut self, tag_list:Vec<String>){
+        for item in tag_list {
+            if !self.tags.contains(&item) {
+                self.tags.push(item.clone());
+            }
+        }
+    }
+}
+
+impl NodeTags for CalculationNode {
+    fn add_tags(&mut self, tag_list:Vec<String>){
+        for item in tag_list {
+            if !self.tags.contains(&item) {
+                self.tags.push(item.clone());
+            }
+        }
+    }
 }
 
 /// The main class that defines the whole data storage structure.
@@ -76,6 +100,11 @@ struct JsonStorage {
     data_nodes: HashMap<String, DataNode>,
 }
 
+/// Enum that wraps around datanodes and calculation_nodes
+enum Node<'a> {
+    Calculation(&'a CalculationNode),
+    Data(&'a DataNode),
+}
 
 
 // implement reading and writing to the database.
@@ -164,21 +193,80 @@ impl JsonStorage {
     fn inspect(& self, name: &String){
         
         // check if it's a calculation node or a data node
-
-        let in_calculation = self.calculation_nodes.contains_key(name);
-        let in_data_node = self.data_nodes.contains_key(name);
-
-        if !in_data_node & !in_calculation {
-            panic!("Value '{}' not found in calculation or data nodes", name);
+        match self.get_node(name) {
+            Ok(node) => {
+                match node {
+                    Node::Calculation(calculation_node) => {
+                        println!("Calculation node:{}", name);
+                        println!("{}", calculation_node);
+                    }
+                    Node::Data(data_node) =>  {println!("Data node: {}.", name);}
+                }
+            }
+            Err(e) => panic!("{}",e .to_string())
         }
 
-        if in_calculation {
-            println!("Calculation node:{}", name);
-            println!("{}", self.calculation_nodes.get(name).expect("Failed to generate representation."));
+    }
+
+    /// Try getting a node from a database. Could be any type of node
+    /// NOTE: I don't want to return a copy, I want to return a view into the class so that I could modify it later
+    fn get_node(&self, name: &String) -> Result<Node, String>{
+
+        let calculation_branch = self.calculation_nodes.contains_key(name);
+        let data_branch = self.data_nodes.contains_key(name);
+
+        if !calculation_branch && !data_branch {
+            return Err("Node not found among calculation nodes or data nodes.".to_string())
+        }
+
+        if calculation_branch {
+            let node = self.calculation_nodes.get(name).expect("Failed to find a calculation node.");
+            let return_node = Node::Calculation(node);
+            return Ok(return_node)
+
         }
         else {
-            println!("Data node: {}.", name);
+            let node = self.data_nodes.get(name).expect("Failed to find the data node");
+            let return_node = Node::Data(node);
+            return Ok(return_node)
         }
+
+    }
+
+    /// Add tags to given nodes
+    fn add_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>){
+
+        for node_name in node_names {
+            match self.get_node(node_name) {
+                Ok(node) => {
+                    match node {
+                        Node::Calculation(calculation_node) => {
+                            for item in tag_list {
+                                if !calculation_node.tags.contains(item) {
+                                    calculation_node.tags.push(item.clone());
+                                }
+                            }
+                        }
+                        Node::Data(data_node) => {
+                            for item in tag_list {
+                                if !data_node.tags.contains(item) {
+                                    data_node.tags.push(item.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => panic!("{}", e.to_string())
+            }
+        }
+
+        
+    }
+
+    fn remove_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>){
+
+
+
 
     }
 
@@ -217,6 +305,9 @@ enum Commands {
     /// Inspect a node
     Inspect {name: String},
 
+    /// add tags to given nodes
+    AddTags {nodes:Vec<String>, tags: Vec<String>},
+
 }
 
 
@@ -252,6 +343,10 @@ fn main() {
         Commands::Inspect {name} => {
             let mut db = read_json_file("test.json").expect("Failed to read the database");
             db.inspect(&name);
+        }
+        Commands::AddTags { nodes, tags } => {
+            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            db.add_tags(&nodes, &tags);
         }
 
     }
