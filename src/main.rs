@@ -210,6 +210,10 @@ impl JsonStorage {
 
     /// Try getting a node from a database. Could be any type of node
     /// NOTE: I don't want to return a copy, I want to return a view into the class so that I could modify it later
+    /// Note this is only for refencing
+    /// 
+    /// Other options: 1) dynamic dispatch; 2) Common trait and generics (not sure if this would work, probably would have to know the result an compile time)
+    /// 3) enum
     fn get_node(&self, name: &String) -> Result<Node, String>{
 
         let calculation_branch = self.calculation_nodes.contains_key(name);
@@ -233,38 +237,77 @@ impl JsonStorage {
 
     }
 
+
     /// Add tags to given nodes
-    fn add_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>){
+    fn add_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>) -> Result<(), String> {
+
 
         for node_name in node_names {
-            match self.get_node(node_name) {
-                Ok(node) => {
-                    match node {
-                        Node::Calculation(calculation_node) => {
-                            for item in tag_list {
-                                if !calculation_node.tags.contains(item) {
-                                    calculation_node.tags.push(item.clone());
-                                }
-                            }
-                        }
-                        Node::Data(data_node) => {
-                            for item in tag_list {
-                                if !data_node.tags.contains(item) {
-                                    data_node.tags.push(item.clone());
-                                }
-                            }
-                        }
+            
+            let calculation_branch = self.calculation_nodes.contains_key(node_name);
+            let data_branch = self.data_nodes.contains_key(node_name);
+    
+            if !calculation_branch && !data_branch {
+                return Err("Node not found among calculation nodes or data nodes.".to_string())
+            }
+
+            if calculation_branch {
+                let node = self.calculation_nodes.get_mut(node_name).expect("Failed to find a calculation node.");
+                for tag in tag_list {
+                    if !node.tags.contains(tag){
+                        node.tags.push(tag.clone());
                     }
                 }
-                Err(e) => panic!("{}", e.to_string())
             }
+            else {
+                let node = self.data_nodes.get_mut(node_name).expect("Failed to find the data node");
+                for tag in tag_list {
+                    if !node.tags.contains(tag){
+                        node.tags.push(tag.clone());
+                    }
+                }
+            }
+    
+            
         }
+        
+        Ok(())
 
         
     }
 
-    fn remove_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>){
 
+    /// Remove tags from the database
+    fn remove_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>)-> Result<(), String> {
+
+        for node_name in node_names {
+            
+            let calculation_branch = self.calculation_nodes.contains_key(node_name);
+            let data_branch = self.data_nodes.contains_key(node_name);
+    
+            if !calculation_branch && !data_branch {
+                return Err("Node not found among calculation nodes or data nodes.".to_string())
+            }
+
+            if calculation_branch {
+                let node = self.calculation_nodes.get_mut(node_name).expect("Failed to find a calculation node.");
+                for tag in tag_list {
+                   node.tags.retain(|x | x != tag);
+                }
+            }
+            else {
+                let node = self.data_nodes.get_mut(node_name).expect("Failed to find the data node");
+                for tag in tag_list {
+                    for tag in tag_list {
+                        node.tags.retain(|x | x != tag);
+                     }
+                }
+            }
+    
+            
+        }
+        
+        Ok(())
 
 
 
@@ -306,7 +349,20 @@ enum Commands {
     Inspect {name: String},
 
     /// add tags to given nodes
-    AddTags {nodes:Vec<String>, tags: Vec<String>},
+    AddTags {
+        #[clap(long = "nodes", required = true)]
+        nodes:Vec<String>, 
+        #[clap(long = "tags", required = true)]
+        tags: Vec<String>
+    },
+
+    /// Remove tags to given nodes
+    RemoveTags {
+        #[clap(long = "nodes", required = true)]
+        nodes:Vec<String>, 
+        #[clap(long = "tags", required = true)]
+        tags: Vec<String>
+    },
 
 }
 
@@ -338,15 +394,20 @@ fn main() {
             let mut db = read_json_file("test.json").expect("Failed to read the database");
             db.add_calculation(&name, &command);
             db.write_database(&"test.json".to_string()).expect("failed to write the database.")
-        }
-        
+        }  
         Commands::Inspect {name} => {
             let mut db = read_json_file("test.json").expect("Failed to read the database");
             db.inspect(&name);
         }
         Commands::AddTags { nodes, tags } => {
             let mut db = read_json_file("test.json").expect("Failed to read the database");
-            db.add_tags(&nodes, &tags);
+            db.add_tags(&nodes, &tags).expect("Faile to add tags");
+            db.write_database(&"test.json".to_string()).expect("failed to write the database.")
+        }
+        Commands::RemoveTags { nodes, tags } => {
+            let mut db = read_json_file("test.json").expect("Failed to read the database");
+            db.remove_tags(&nodes, &tags).expect("Faile to add tags");
+            db.write_database(&"test.json".to_string()).expect("failed to write the database.")
         }
 
     }

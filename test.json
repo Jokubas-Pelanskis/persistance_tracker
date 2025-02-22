@@ -1,12 +1,12 @@
 {
   "calculation_nodes": {
-    "euoaoeueuteaoeust": {
+    "test": {
       "git_hash": "",
       "tags": [],
       "calculation": {
         "inputs": [
           "hello",
-          "thisthat"
+          "this"
         ],
         "outputs": [],
         "program": "python3 input_0 input_1"
@@ -33,7 +33,7 @@
         "origin": ""
       }
     },
-    "test": {
+    "teaoeust": {
       "git_hash": "",
       "tags": [],
       "calculation": {
@@ -83,13 +83,13 @@
         "origin": ""
       }
     },
-    "oeuteaoeust": {
+    "euoaoeueuteaoeust": {
       "git_hash": "",
       "tags": [],
       "calculation": {
         "inputs": [
           "hello",
-          "this"
+          "thisthat"
         ],
         "outputs": [],
         "program": "python3 input_0 input_1"
@@ -99,7 +99,7 @@
         "origin": ""
       }
     },
-    "teaoeust": {
+    "oeuteaoeust": {
       "git_hash": "",
       "tags": [],
       "calculation": {
@@ -133,9 +133,19 @@
     }
   },
   "data_nodes": {
-    "config.yaml": {
+    "this": {
       "save": false,
       "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "hello": {
+      "save": false,
+      "tags": [
+        "test_tag"
+      ],
       "copy": {
         "name": "",
         "origin": ""
@@ -157,23 +167,17 @@
         "origin": ""
       }
     },
-    "this": {
-      "save": false,
-      "tags": [],
-      "copy": {
-        "name": "",
-        "origin": ""
-      }
-    },
     "raw_data": {
       "save": false,
-      "tags": [],
+      "tags": [
+        "test_tag"
+      ],
       "copy": {
         "name": "",
         "origin": ""
       }
     },
-    "hello": {
+    "config.yaml": {
       "save": false,
       "tags": [],
       "copy": {
