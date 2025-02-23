@@ -1,4 +1,5 @@
 use clap::{Parser,Subcommand};
+use petgraph::visit::EdgeRef;
 use serde::{Serialize, Deserialize};
 use std::fs::File;
 use std::io::{self, Write, Read};
@@ -6,8 +7,9 @@ use std::collections::HashMap;
 use regex::Regex;
 use std::fmt;
 // Use the graphing tool
-use petgraph::graph::{NodeIndex, DiGraph};
+use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
 use petgraph::dot::{Dot, Config};
+use petgraph::algo::has_path_connecting;
 // Create a new database stucture for storing all the json data
 
 
@@ -368,7 +370,7 @@ impl JsonStorage {
     }
 
     /// Covert database to a DiGraph (could be a filtered database) to a graph representation for selection of the graph in other ways and plotting too.
-    fn generate_graph(& self) -> DiGraph::<&str, &str>{
+    fn generate_digraph(& self) -> (DiGraph::<&str, &str>, HashMap<String, NodeIndex>){
         
         let mut graph = DiGraph::<&str, &str>::new(); // initialize the final graph
         let mut graph_nodes:  HashMap<String, NodeIndex> = HashMap::new(); // node storage thing
@@ -398,9 +400,62 @@ impl JsonStorage {
         }
 
         graph.extend_with_edges(&edges);
-        graph
+        return (graph, graph_nodes)
 
     }
+
+    /// Similar to the previous one, but generates undirected graph.
+    fn generate_graph(& self) -> (UnGraph::<&str, &str>, HashMap<String, NodeIndex>){
+        
+        let mut graph = UnGraph::<&str, &str>::new_undirected(); // initialize the final graph
+        let mut graph_nodes:  HashMap<String, NodeIndex> = HashMap::new(); // node storage thing
+        let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
+
+        // Create nodes for the graph
+        for calc_name in self.calculation_nodes.keys() {
+            let gn = graph.add_node(&calc_name);
+            graph_nodes.insert(calc_name.clone(), gn);
+        }
+        for data_name in self.data_nodes.keys() {
+            let gn = graph.add_node(&data_name);
+            graph_nodes.insert(data_name.clone(), gn);
+        }
+
+
+        // Add edges to the graph
+
+        for (calc_name, calc_node) in self.calculation_nodes.iter() {
+            for inp in &calc_node.calculation.inputs {
+                edges.push((*graph_nodes.get(inp).expect("failed"), *graph_nodes.get(calc_name).expect("failed")));
+            }
+
+            for outp in &calc_node.calculation.outputs {
+                edges.push((*graph_nodes.get(calc_name).expect("failed"), *graph_nodes.get(outp).expect("failed")));
+            }
+        }
+
+        graph.extend_with_edges(&edges);
+        return (graph, graph_nodes)
+
+    }
+
+
+
+
+    /// Given a name of the node, finds all connected nodes and returns a new, smaller graph
+    fn select_disconected_branch(& self, name: &String) {
+
+        let (graph, graph_nodes) = self.generate_graph();
+        let focus_node = graph_nodes.get(name).expect("Failed to find node in the database!");
+
+        for id in graph_nodes.values(){
+            if has_path_connecting(&graph, id.clone(), focus_node.clone(), None){
+                println!("Node {} is connecetd.", id.index());
+            }
+        }
+    }
+
+
 
 }
 
@@ -460,14 +515,13 @@ enum Commands {
     Select {
 
     },
+    SelectDisBranch { name: String},
     /// Visualize the graph
     Visualize {
         graph_json: Option<String>
     }
 
 }
-
-
 
 fn main() {
     let cli = Cli::parse();
@@ -534,6 +588,10 @@ fn main() {
             let new_db = db.filter_by_tags(&current_tags.tags);
             println!("{}", serde_json::to_string(&new_db).unwrap())
         }
+        Commands::SelectDisBranch { name } => {
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let graph = db.select_disconected_branch(name);
+        }
         Commands::Visualize { graph_json } => {
             
             // handle the cases when the input is passed directly and when it could by piped.
@@ -549,7 +607,7 @@ fn main() {
             println!("{}",graph_data);
             // Create the databsae from the given node
             let db: JsonStorage = serde_json::from_str(&graph_data).expect("Failed converting Json to the database object. Aborting.");
-            let graph = db.generate_graph();
+            let (graph, _graph_nodes) = db.generate_digraph();
             println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
 
         }
