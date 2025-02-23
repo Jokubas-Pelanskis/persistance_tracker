@@ -408,7 +408,7 @@ fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
     let mut file = File::open(filename)?; // Open the file
     let mut contents = String::new();
     file.read_to_string(&mut contents)?; // Read file into a string
-    let db: JsonStorage = serde_json::from_str(&contents)?; // Deserialize JSON
+    let db: JsonStorage  = serde_json::from_str(&contents)?; // Deserialize JSON
     Ok(db)
 }
 
@@ -462,7 +462,7 @@ enum Commands {
     },
     /// Visualize the graph
     Visualize {
-        graph_json: String
+        graph_json: Option<String>
     }
 
 }
@@ -489,7 +489,24 @@ fn main() {
         }
         Commands::Print {  } => {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            println!("{}", serde_json::to_string(&db).expect("Failed to seriazile the database for printing."))
+            let write_string = serde_json::to_string(&db).expect("Failed to seriazile the database for printing.");
+
+            // print!("'{}'", write_string);
+
+            // ------
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+        
+            // Try writing to stdout
+            if let Err(e) = writeln!(handle, "{}", write_string) {
+                if e.kind() == io::ErrorKind::BrokenPipe {
+                    // Exit gracefully if the pipe is closed early
+                    std::process::exit(0);
+                } else {
+                    eprintln!("Failed to write to stdout: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::AddCalculation {name, command} => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
@@ -518,12 +535,23 @@ fn main() {
             println!("{}", serde_json::to_string(&new_db).unwrap())
         }
         Commands::Visualize { graph_json } => {
-            // let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            
+            // handle the cases when the input is passed directly and when it could by piped.
+            let graph_data = match graph_json {
+                Some(data) => {data.clone()}
+                None => {                
+                    let mut buffer = String::new();
+                    io::stdin().read_to_string(&mut buffer).expect("Failed to read from stdin");
+                    buffer
+                }
+            };
 
+            println!("{}",graph_data);
             // Create the databsae from the given node
-            let db: JsonStorage = serde_json::from_str(&graph_json).expect("Failed to read the the input from the command line.");
+            let db: JsonStorage = serde_json::from_str(&graph_data).expect("Failed converting Json to the database object. Aborting.");
             let graph = db.generate_graph();
             println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
+
         }
 
     }
