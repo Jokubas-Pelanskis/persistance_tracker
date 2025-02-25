@@ -173,6 +173,17 @@ impl JsonStorage {
             .map(|cap| cap[1].to_string()) // Get the file name without 'input()'
             .collect();
 
+        // // Add the current time to the input if it does not exist.
+        // let re = Regex::new(r"^\d{16}").unwrap();
+
+        // for i in inputs.len() {
+        //     if re.match(inputs[i]) {
+        //         inp
+        //     }
+
+        // }
+
+
 
         // Format the command string
         
@@ -630,7 +641,12 @@ enum Commands {
     Get,
 
     /// Add a calculation to the database.
-    NewCalculation {name: String, command : String},
+    NewCalculation {
+        name: String,
+        command : String,
+        /// Database in the string format
+        database: Option<String>
+        },
     /// Inspect a node
     Inspect {name: String},
     /// add tags to given nodes
@@ -698,10 +714,10 @@ fn main() {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             write_database_to_stream(&db);
         }
-        Commands::NewCalculation {name, command} => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+        Commands::NewCalculation {name, command, database} => {
+            let mut db = get_database_input(database);
             db.add_calculation(&name, &command);
-            db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
+            write_database_to_stream(&db);
         }  
         Commands::Inspect {name} => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
