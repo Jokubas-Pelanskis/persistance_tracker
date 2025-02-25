@@ -10,6 +10,7 @@ use std::fmt;
 use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
 use petgraph::dot::{Dot, Config};
 use petgraph::algo::has_path_connecting;
+use std::time::{SystemTime, UNIX_EPOCH};
 // Create a new database stucture for storing all the json data
 
 
@@ -142,6 +143,7 @@ impl JsonStorage {
         if self.calculation_nodes.contains_key(base_name) {
             panic!("Trying to add a calculation with a name that already exists. Aborting. Nothing being written to the database.")
         }
+        // ADD MORE VALIDATION. Make sure all inputs have time string attached to them!!!!!
 
 
         // Extract inputs and outputs
@@ -405,9 +407,9 @@ impl JsonStorage {
     }
 
     /// Similar to the previous one, but generates undirected graph.
-    fn generate_graph(& self) -> (UnGraph::<&str, &str>, HashMap<String, NodeIndex>){
+    fn generate_ungraph(& self) -> (UnGraph::<&str, ()>, HashMap<String, NodeIndex>){
         
-        let mut graph = UnGraph::<&str, &str>::new_undirected(); // initialize the final graph
+        let mut graph = UnGraph::<&str, ()>::new_undirected(); // initialize the final graph
         let mut graph_nodes:  HashMap<String, NodeIndex> = HashMap::new(); // node storage thing
         let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
@@ -439,22 +441,112 @@ impl JsonStorage {
 
     }
 
-
-
-
     /// Given a name of the node, finds all connected nodes and returns a new, smaller graph
-    fn select_disconected_branch(& self, name: &String) {
-
-        let (graph, graph_nodes) = self.generate_graph();
-        let focus_node = graph_nodes.get(name).expect("Failed to find node in the database!");
-
-        for id in graph_nodes.values(){
-            if has_path_connecting(&graph, id.clone(), focus_node.clone(), None){
-                println!("Node {} is connecetd.", id.index());
+    fn select_disconected_branch(&self, name: &String) -> DiGraph<String, ()> {
+        let mut new_graph: DiGraph<String, ()> = DiGraph::new();
+        let (current_graph, current_node_name_map) = self.generate_ungraph();
+        let origin_node = current_node_name_map.get(name).expect("Failed to find node in the database!").clone();
+        
+        // Create a mapping between original node indices and new node indices
+        let mut node_mapping: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        
+        // First, add all connected nodes to the new graph
+        for (node_name, node_index) in current_node_name_map.iter() {
+            if has_path_connecting(&current_graph, *node_index, origin_node, None) {
+                // Create a new node with an owned String
+                let new_idx = new_graph.add_node(node_name.clone());
+                node_mapping.insert(*node_index, new_idx);
             }
         }
+        
+        // Now add the edges between the nodes in the new graph
+        for (node_name, node_index) in current_node_name_map.iter() {
+            if let Some(&new_idx) = node_mapping.get(node_index) {
+                if self.calculation_nodes.contains_key(node_name) {
+                    let calc_node = self.calculation_nodes.get(node_name).expect("failed to get the node.");
+                    
+                    // Add edges for inputs
+                    for inp in &calc_node.calculation.inputs {
+                        if let Some(&input_node) = current_node_name_map.get(inp) {
+                            if let Some(&new_input_idx) = node_mapping.get(&input_node) {
+                                new_graph.add_edge(new_input_idx, new_idx, ());
+                            }
+                        }
+                    }
+                    
+                    // Add edges for outputs
+                    for outp in &calc_node.calculation.outputs {
+                        if let Some(&output_node) = current_node_name_map.get(outp) {
+                            if let Some(&new_output_idx) = node_mapping.get(&output_node) {
+                                new_graph.add_edge(new_idx, new_output_idx, ());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        new_graph
     }
 
+/// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
+/// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
+fn copy_branch(& self) -> JsonStorage {
+    let mut new_data_nodes: HashMap<String, DataNode> = HashMap::new();
+    let mut new_calc_nodes: HashMap<String, CalculationNode> = HashMap::new();
+    let mut rename_map: HashMap<String, String> = HashMap::new();
+    let re = Regex::new(r"^\d+").unwrap();
+    
+    // Go through all the data nodes.
+    for (node_name, node_obj) in self.data_nodes.iter() {
+        // current time
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Failed to get current system time.")
+            .as_nanos();
+        // generate new key by changing the time stamp
+        let new_name = re.replace(node_name, now.to_string()).to_string();
+
+        rename_map.insert(node_name.clone(), new_name.clone());
+        new_data_nodes.insert(new_name, node_obj.clone());
+    }
+
+    for (calc_name, calc_obj) in self.calculation_nodes.iter() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Failed to get current system time.")
+            .as_nanos();
+        let new_name = re.replace(calc_name, now.to_string()).to_string();
+        rename_map.insert(calc_name.clone(), new_name.clone());
+
+        let mut new_calc_node = calc_obj.clone();
+
+        // Update inputs with new names
+        let mut updated_inputs = Vec::new();
+        for inp in &new_calc_node.calculation.inputs {
+            let new_inp = rename_map.get(inp).expect("Failed to find input in rename map");
+            updated_inputs.push(new_inp.clone());
+        }
+        new_calc_node.calculation.inputs = updated_inputs;
+
+        // Update outputs with new names
+        let mut updated_outputs = Vec::new();
+        for outp in &new_calc_node.calculation.outputs {
+            let new_outp = rename_map.get(outp).expect("Failed to find output in rename map");
+            updated_outputs.push(new_outp.clone());
+        }
+        new_calc_node.calculation.outputs = updated_outputs;
+
+        new_calc_nodes.insert(new_name, new_calc_node);
+    }
+
+    let new_db = JsonStorage {
+        calculation_nodes: new_calc_nodes,
+        data_nodes: new_data_nodes,
+    };
+
+    new_db
+}
 
 
 }
@@ -476,6 +568,43 @@ fn read_current_file(filename: &str) -> std::io::Result<CurrentTags> {
 }
 
 
+/// handles whether the database comes from stdin or as the last argument named 'database'.
+fn get_database_input(database: &Option<String>) -> JsonStorage{
+
+    let database_json_string = match database {
+        Some(data) => {data.clone()}
+        None => {                
+            let mut buffer = String::new();
+            io::stdin().read_to_string(&mut buffer).expect("Failed to read from stdin");
+            buffer
+        }
+    };
+    let db: JsonStorage = serde_json::from_str(&database_json_string).expect("Failed converting Json to the database object. Aborting.");
+    return db
+}
+
+fn write_database_to_stream(database: &JsonStorage){
+
+    let write_string = serde_json::to_string(database).expect("Failed to seriazile the database for printing.");
+
+    // ------
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    // Try writing to stdout
+    if let Err(e) = writeln!(handle, "{}", write_string) {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            // Exit gracefully if the pipe is closed early
+            std::process::exit(0);
+        } else {
+            eprintln!("Failed to write to stdout: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+}
+
+
 
 /// Command line interface
 #[derive(Parser)]
@@ -491,8 +620,9 @@ enum Commands {
     /// Initialize the databse
     Init,
 
-    /// Print the database. Reads the database and directly prints to stdstream.
-    Print {},
+    /// Get the database and inject that into the stdout.
+    Get,
+
     /// Add a calculation to the database.
     AddCalculation {name: String, command : String},
     /// Inspect a node
@@ -511,14 +641,22 @@ enum Commands {
         #[clap(long = "tags", required = true)]
         tags: Vec<String>
     },
-    /// Select a set of nodes for further operation
-    Select {
+    /// Select nodes by tag
+    SelectTag {
+        #[clap(long = "tag", required = true)]
+        tags:Vec<String>,
 
+        /// Database in the string format
+        database: Option<String>
     },
     SelectDisBranch { name: String},
     /// Visualize the graph
     Visualize {
-        graph_json: Option<String>
+        database: Option<String>
+    },
+    /// Rename nodes
+    Rename {
+
     }
 
 }
@@ -541,26 +679,9 @@ fn main() {
             let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
             default_struct.write_database(&JSONDATABASE.to_string());
         }
-        Commands::Print {  } => {
+        Commands::Get  => {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            let write_string = serde_json::to_string(&db).expect("Failed to seriazile the database for printing.");
-
-            // print!("'{}'", write_string);
-
-            // ------
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-        
-            // Try writing to stdout
-            if let Err(e) = writeln!(handle, "{}", write_string) {
-                if e.kind() == io::ErrorKind::BrokenPipe {
-                    // Exit gracefully if the pipe is closed early
-                    std::process::exit(0);
-                } else {
-                    eprintln!("Failed to write to stdout: {}", e);
-                    std::process::exit(1);
-                }
-            }
+            write_database_to_stream(&db);
         }
         Commands::AddCalculation {name, command} => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
@@ -581,36 +702,29 @@ fn main() {
             db.remove_tags(&nodes, &tags).expect("Faile to add tags");
             db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
         }
-        Commands::Select {  } => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            let current_tags = read_current_file(&CURRENTTAGS).expect("Failed reading tags");
-    
-            let new_db = db.filter_by_tags(&current_tags.tags);
-            println!("{}", serde_json::to_string(&new_db).unwrap())
+        Commands::SelectTag { tags, database } => {
+            
+            let db = get_database_input(database);
+            let new_db = db.filter_by_tags(tags);
+            write_database_to_stream(&new_db);
         }
         Commands::SelectDisBranch { name } => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            let graph = db.select_disconected_branch(name);
+            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let _ = db.select_disconected_branch(name);
         }
-        Commands::Visualize { graph_json } => {
+        Commands::Visualize { database } => {
             
             // handle the cases when the input is passed directly and when it could by piped.
-            let graph_data = match graph_json {
-                Some(data) => {data.clone()}
-                None => {                
-                    let mut buffer = String::new();
-                    io::stdin().read_to_string(&mut buffer).expect("Failed to read from stdin");
-                    buffer
-                }
-            };
-
-            println!("{}",graph_data);
-            // Create the databsae from the given node
-            let db: JsonStorage = serde_json::from_str(&graph_data).expect("Failed converting Json to the database object. Aborting.");
+            let db = get_database_input(database);
             let (graph, _graph_nodes) = db.generate_digraph();
             println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
 
         }
+        Commands::Rename {} => {
+            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let copied_db = db.copy_branch();
 
+            copied_db.write_database("test.json");
+        }
     }
 }
