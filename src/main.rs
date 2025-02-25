@@ -136,6 +136,18 @@ impl JsonStorage {
         Ok(())
     }
     
+    /// Merge two databases
+    /// This overwrites the nodes if there are clashes. This would be used if want to add tags and then save the results
+    fn add_database(&mut self, other_db: &JsonStorage) {
+        for (calc_name, calc_node) in other_db.calculation_nodes.iter() {
+            self.calculation_nodes.insert(calc_name.clone(), calc_node.clone());
+        }
+    
+        for (data_name, data_node) in other_db.data_nodes.iter() {
+            self.data_nodes.insert(data_name.clone(), data_node.clone());
+        }
+    }
+
     /// Add a new calculation to the database
     fn add_calculation(&mut self, base_name: &String, command_string: & String ) {
         
@@ -144,6 +156,7 @@ impl JsonStorage {
             panic!("Trying to add a calculation with a name that already exists. Aborting. Nothing being written to the database.")
         }
         // ADD MORE VALIDATION. Make sure all inputs have time string attached to them!!!!!
+        // If there is no number present, then add it automatically, that will simplify creation of new calculations.
 
 
         // Extract inputs and outputs
@@ -253,76 +266,69 @@ impl JsonStorage {
     }
 
     /// Add tags to given nodes
-    fn add_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>) -> Result<(), String> {
+    fn add_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
 
+        let node_names: Vec<String> = self.calculation_nodes.keys().cloned().collect();
 
         for node_name in node_names {
+            let node = self.calculation_nodes.get_mut(&node_name).expect("Failed to find a calculation node.");
             
-            let calculation_branch = self.calculation_nodes.contains_key(node_name);
-            let data_branch = self.data_nodes.contains_key(node_name);
-    
-            if !calculation_branch && !data_branch {
-                return Err("Node not found among calculation nodes or data nodes.".to_string())
-            }
-
-            if calculation_branch {
-                let node = self.calculation_nodes.get_mut(node_name).expect("Failed to find a calculation node.");
-                for tag in tag_list {
-                    if !node.tags.contains(tag){
-                        node.tags.push(tag.clone());
-                    }
+            for tag in tag_list {
+                if !node.tags.contains(tag) {
+                    node.tags.push(tag.clone());
                 }
             }
-            else {
-                let node = self.data_nodes.get_mut(node_name).expect("Failed to find the data node");
-                for tag in tag_list {
-                    if !node.tags.contains(tag){
-                        node.tags.push(tag.clone());
-                    }
-                }
-            }
-    
-            
         }
-        
+
+        let node_names: Vec<String> = self.data_nodes.keys().cloned().collect();
+        for node_name in node_names {
+            let node = self.data_nodes.get_mut(&node_name).expect("Failed to find a calculation node.");
+            
+            for tag in tag_list {
+                if !node.tags.contains(tag) {
+                    node.tags.push(tag.clone());
+                }
+            }
+        }
+      
         Ok(())
 
         
     }
 
     /// Remove tags from the database
-    fn remove_tags(&mut self, node_names: &Vec<String>, tag_list: &Vec<String>)-> Result<(), String> {
+    fn remove_tags(&mut self, tag_list: &Vec<String>)-> Result<(), String> {
 
+
+        let node_names: Vec<String> = self.calculation_nodes.keys().cloned().collect();
+
+        // Then iterate over the collected names
         for node_name in node_names {
+            let node = self.calculation_nodes.get_mut(&node_name).expect("Failed to find a calculation node.");
             
-            let calculation_branch = self.calculation_nodes.contains_key(node_name);
-            let data_branch = self.data_nodes.contains_key(node_name);
-    
-            if !calculation_branch && !data_branch {
-                return Err("Node not found among calculation nodes or data nodes.".to_string())
-            }
-
-            if calculation_branch {
-                let node = self.calculation_nodes.get_mut(node_name).expect("Failed to find a calculation node.");
-                for tag in tag_list {
-                   node.tags.retain(|x | x != tag);
+            for tag in tag_list {
+                // Remove the tag if it exists
+                if let Some(index) = node.tags.iter().position(|t| t == tag) {
+                    node.tags.remove(index);
                 }
             }
-            else {
-                let node = self.data_nodes.get_mut(node_name).expect("Failed to find the data node");
-                for tag in tag_list {
-                    for tag in tag_list {
-                        node.tags.retain(|x | x != tag);
-                     }
-                }
-            }
-    
-            
         }
-        
+
+        let node_names: Vec<String> = self.data_nodes.keys().cloned().collect();
+
+        // Then iterate over the collected names
+        for node_name in node_names {
+            let node = self.data_nodes.get_mut(&node_name).expect("Failed to find a calculation node.");
+            
+            for tag in tag_list {
+                // Remove the tag if it exists
+                if let Some(index) = node.tags.iter().position(|t| t == tag) {
+                    node.tags.remove(index);
+                }
+            }
+        }
+
         Ok(())
-
-
 
     }
 
@@ -489,64 +495,64 @@ impl JsonStorage {
         new_graph
     }
 
-/// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
-/// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
-fn copy_branch(& self) -> JsonStorage {
-    let mut new_data_nodes: HashMap<String, DataNode> = HashMap::new();
-    let mut new_calc_nodes: HashMap<String, CalculationNode> = HashMap::new();
-    let mut rename_map: HashMap<String, String> = HashMap::new();
-    let re = Regex::new(r"^\d+").unwrap();
-    
-    // Go through all the data nodes.
-    for (node_name, node_obj) in self.data_nodes.iter() {
-        // current time
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Failed to get current system time.")
-            .as_nanos();
-        // generate new key by changing the time stamp
-        let new_name = re.replace(node_name, now.to_string()).to_string();
+    /// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
+    /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
+    fn copy_branch(& self) -> JsonStorage {
+        let mut new_data_nodes: HashMap<String, DataNode> = HashMap::new();
+        let mut new_calc_nodes: HashMap<String, CalculationNode> = HashMap::new();
+        let mut rename_map: HashMap<String, String> = HashMap::new();
+        let re = Regex::new(r"^\d+").unwrap();
+        
+        // Go through all the data nodes.
+        for (node_name, node_obj) in self.data_nodes.iter() {
+            // current time
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Failed to get current system time.")
+                .as_nanos();
+            // generate new key by changing the time stamp
+            let new_name = re.replace(node_name, now.to_string()).to_string();
 
-        rename_map.insert(node_name.clone(), new_name.clone());
-        new_data_nodes.insert(new_name, node_obj.clone());
-    }
-
-    for (calc_name, calc_obj) in self.calculation_nodes.iter() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Failed to get current system time.")
-            .as_nanos();
-        let new_name = re.replace(calc_name, now.to_string()).to_string();
-        rename_map.insert(calc_name.clone(), new_name.clone());
-
-        let mut new_calc_node = calc_obj.clone();
-
-        // Update inputs with new names
-        let mut updated_inputs = Vec::new();
-        for inp in &new_calc_node.calculation.inputs {
-            let new_inp = rename_map.get(inp).expect("Failed to find input in rename map");
-            updated_inputs.push(new_inp.clone());
+            rename_map.insert(node_name.clone(), new_name.clone());
+            new_data_nodes.insert(new_name, node_obj.clone());
         }
-        new_calc_node.calculation.inputs = updated_inputs;
 
-        // Update outputs with new names
-        let mut updated_outputs = Vec::new();
-        for outp in &new_calc_node.calculation.outputs {
-            let new_outp = rename_map.get(outp).expect("Failed to find output in rename map");
-            updated_outputs.push(new_outp.clone());
+        for (calc_name, calc_obj) in self.calculation_nodes.iter() {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Failed to get current system time.")
+                .as_nanos();
+            let new_name = re.replace(calc_name, now.to_string()).to_string();
+            rename_map.insert(calc_name.clone(), new_name.clone());
+
+            let mut new_calc_node = calc_obj.clone();
+
+            // Update inputs with new names
+            let mut updated_inputs = Vec::new();
+            for inp in &new_calc_node.calculation.inputs {
+                let new_inp = rename_map.get(inp).expect("Failed to find input in rename map");
+                updated_inputs.push(new_inp.clone());
+            }
+            new_calc_node.calculation.inputs = updated_inputs;
+
+            // Update outputs with new names
+            let mut updated_outputs = Vec::new();
+            for outp in &new_calc_node.calculation.outputs {
+                let new_outp = rename_map.get(outp).expect("Failed to find output in rename map");
+                updated_outputs.push(new_outp.clone());
+            }
+            new_calc_node.calculation.outputs = updated_outputs;
+
+            new_calc_nodes.insert(new_name, new_calc_node);
         }
-        new_calc_node.calculation.outputs = updated_outputs;
 
-        new_calc_nodes.insert(new_name, new_calc_node);
+        let new_db = JsonStorage {
+            calculation_nodes: new_calc_nodes,
+            data_nodes: new_data_nodes,
+        };
+
+        new_db
     }
-
-    let new_db = JsonStorage {
-        calculation_nodes: new_calc_nodes,
-        data_nodes: new_data_nodes,
-    };
-
-    new_db
-}
 
 
 }
@@ -624,22 +630,24 @@ enum Commands {
     Get,
 
     /// Add a calculation to the database.
-    AddCalculation {name: String, command : String},
+    NewCalculation {name: String, command : String},
     /// Inspect a node
     Inspect {name: String},
     /// add tags to given nodes
     AddTags {
-        #[clap(long = "nodes", required = true)]
-        nodes:Vec<String>, 
+
         #[clap(long = "tags", required = true)]
-        tags: Vec<String>
+        tags: Vec<String>,
+        /// Database in the string format
+        database: Option<String>
     },
     /// Remove tags to given nodes
     RemoveTags {
-        #[clap(long = "nodes", required = true)]
-        nodes:Vec<String>, 
+
         #[clap(long = "tags", required = true)]
-        tags: Vec<String>
+        tags: Vec<String>,
+        /// Database in the string format
+        database: Option<String>
     },
     /// Select nodes by tag
     SelectTag {
@@ -651,12 +659,19 @@ enum Commands {
     },
     SelectDisBranch { name: String},
     /// Visualize the graph
-    Visualize {
+    Show {
         database: Option<String>
     },
     /// Rename nodes
     Rename {
+        /// Database in the string format
+        database: Option<String>
+    },
 
+    /// Adds given stream from the command line to the actual database.
+    Add {
+        /// Database passed from the coomand line
+        database: Option<String>
     }
 
 }
@@ -683,7 +698,7 @@ fn main() {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             write_database_to_stream(&db);
         }
-        Commands::AddCalculation {name, command} => {
+        Commands::NewCalculation {name, command} => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.add_calculation(&name, &command);
             db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
@@ -692,15 +707,15 @@ fn main() {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.inspect(&name);
         }
-        Commands::AddTags { nodes, tags } => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            db.add_tags(&nodes, &tags).expect("Faile to add tags");
-            db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
+        Commands::AddTags { tags, database } => {
+            let mut db = get_database_input(database);
+            db.add_tags( &tags).expect("Faile to add tags");
+            write_database_to_stream(&db);
         }
-        Commands::RemoveTags { nodes, tags } => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            db.remove_tags(&nodes, &tags).expect("Faile to add tags");
-            db.write_database(&JSONDATABASE.to_string()).expect("failed to write the database.")
+        Commands::RemoveTags {tags, database } => {
+            let mut db = get_database_input(database);
+            db.remove_tags(&tags).expect("Faile to add tags");
+            write_database_to_stream(&db);
         }
         Commands::SelectTag { tags, database } => {
             
@@ -712,7 +727,7 @@ fn main() {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             let _ = db.select_disconected_branch(name);
         }
-        Commands::Visualize { database } => {
+        Commands::Show { database } => {
             
             // handle the cases when the input is passed directly and when it could by piped.
             let db = get_database_input(database);
@@ -720,11 +735,20 @@ fn main() {
             println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
 
         }
-        Commands::Rename {} => {
-            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+        Commands::Rename {database} => {
+            let db = get_database_input(database);
             let copied_db = db.copy_branch();
+            write_database_to_stream(&copied_db);
 
-            copied_db.write_database("test.json");
+        }
+        Commands::Add {database} =>{
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let db_std = get_database_input(database);
+
+            // combine
+            db.add_database(&db_std);
+            db.write_database(JSONDATABASE);
+
         }
     }
 }
