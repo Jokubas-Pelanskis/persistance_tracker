@@ -204,11 +204,9 @@ impl JsonStorage {
         }
 
         
-        let calculation_manager = CalculationManager{inputs: inputs.clone(), outputs: outputs.clone(), program: final_command};
-        
+        let calculation_manager = CalculationManager{inputs: inputs.clone(), outputs: outputs.clone(), program: final_command};        
         let calculation_node = CalculationNode{calculation: calculation_manager, copy:CopyManager::default(), git_hash: "".to_string(), tags:Vec::new()};
-        println!("Adding to the database:");
-        println!("{}", calculation_node);
+
         
         self.calculation_nodes.insert(base_name_formated.to_string(), calculation_node);
         
