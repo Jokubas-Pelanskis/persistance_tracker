@@ -506,9 +506,32 @@ impl JsonStorage {
         new_graph
     }
 
+    /// Convert Graph to database object within the current database context.
+    fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
+
+        let mut calculation_nodes: HashMap<String, CalculationNode> = HashMap::new();
+        let mut data_nodes: HashMap<String, DataNode> = HashMap::new();
+
+        for node_id in graph.node_indices() {
+            let node_name = graph.node_weight(node_id).expect("Failed to get a node name");
+            
+            // handle the calculation node 
+            if self.calculation_nodes.contains_key(node_name) {
+                calculation_nodes.insert(node_name.clone(), self.calculation_nodes.get(node_name).expect("failed").clone());
+            }   
+            else {
+                data_nodes.insert(node_name.clone(), self.data_nodes.get(node_name).expect("failed").clone());
+            }
+        }
+
+        JsonStorage {calculation_nodes : calculation_nodes, data_nodes : data_nodes}
+    }
+
+
+
     /// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
     /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
-    fn copy_branch(& self) -> JsonStorage {
+    fn copy_database(& self) -> JsonStorage {
         let mut new_data_nodes: HashMap<String, DataNode> = HashMap::new();
         let mut new_calc_nodes: HashMap<String, CalculationNode> = HashMap::new();
         let mut rename_map: HashMap<String, String> = HashMap::new();
@@ -567,6 +590,12 @@ impl JsonStorage {
 
 
 }
+
+
+
+
+
+
 
 fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
     let mut file = File::open(filename)?; // Open the file
@@ -673,7 +702,7 @@ enum Commands {
         /// Database in the string format
         database: Option<String>
     },
-    SelectDisBranch { name: String},
+    SelectSubbranch { name: String, database: Option<String>},
     /// Visualize the graph
     Show {
         database: Option<String>
@@ -739,9 +768,11 @@ fn main() {
             let new_db = db.filter_by_tags(tags);
             write_database_to_stream(&new_db);
         }
-        Commands::SelectDisBranch { name } => {
-            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            let _ = db.select_disconected_branch(name);
+        Commands::SelectSubbranch { name , database} => {
+            let db = get_database_input(database);
+            let graph = db.select_disconected_branch(name);
+            let new_db = db.digraph_to_database(&graph);
+            write_database_to_stream(&new_db);
         }
         Commands::Show { database } => {
             
@@ -753,14 +784,14 @@ fn main() {
         }
         Commands::Rename {database} => {
             let db = get_database_input(database);
-            let copied_db = db.copy_branch();
+            let copied_db = db.copy_database();
             write_database_to_stream(&copied_db);
 
         }
         Commands::Add {database} =>{
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             let db_std = get_database_input(database);
-
+ 
             // combine
             db.add_database(&db_std);
             db.write_database(JSONDATABASE);
