@@ -783,7 +783,9 @@ enum Commands {
         command : String,
         },
     /// Inspect a node
-    Inspect {name: String},
+    Inspect {
+        name: String,
+    },
     /// add tags to given nodes
     AddTags {
 
