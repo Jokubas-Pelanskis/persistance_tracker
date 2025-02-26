@@ -11,6 +11,7 @@ use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
 use petgraph::dot::{Dot, Config};
 use petgraph::algo::has_path_connecting;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
 // Create a new database stucture for storing all the json data
 
 
@@ -28,14 +29,20 @@ struct CalculationManager {
 
 impl CalculationManager {
     /// Generate the command to run the calculation.
-    fn get_full_program(& self) -> String {
+    fn get_full_program(& self, folder_base: &str) -> String {
+
+        let relative_path = Path::new(folder_base);
         let mut final_command = self.program.clone();
 
-        for (i, value) in self.outputs.iter().enumerate() {
-            final_command = final_command.replace(&format!("output_{}", i), value);
+
+        for (i, filename) in self.outputs.iter().enumerate() {
+            let full_filename = relative_path.join(filename).to_string_lossy().to_string();
+            final_command = final_command.replace(&format!("output_{}", i), &full_filename);
         }
-        for (i, value) in self.inputs.iter().enumerate() {
-            final_command = final_command.replace(&format!("input_{}", i),value);
+
+        for (i, filename) in self.inputs.iter().enumerate() {
+            let full_filename = relative_path.join(filename).to_string_lossy().to_string();
+            final_command = final_command.replace(&format!("input_{}", i), &full_filename);
         }
         final_command
 
@@ -57,15 +64,6 @@ struct CalculationNode {
     tags: Vec<String>, // For stornig things like the experiment or other thigs. 
     calculation: CalculationManager,
     copy: CopyManager,
-}
-
-impl fmt::Display for CalculationNode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), std::fmt::Error>{
-
-        let full_program = self.calculation.get_full_program();
-
-        write!(f, "generic program: \n{} \nfull program:\n{}\n", self.calculation.program, full_program)
-    }
 }
 
 
@@ -226,7 +224,7 @@ impl JsonStorage {
     }
 
     /// Inspect a node for further information
-    fn inspect(& self, name: &String){
+    fn inspect(& self, name: &String, data_folder: &String){
         
         // check if it's a calculation node or a data node
         match self.get_node(name) {
@@ -234,7 +232,7 @@ impl JsonStorage {
                 match node {
                     Node::Calculation(calculation_node) => {
                         println!("Calculation node:{}", name);
-                        println!("{}", calculation_node);
+                        println!("{}", calculation_node.calculation.get_full_program(data_folder));
                     }
                     Node::Data(data_node) =>  {println!("Data node: {}.", name);}
                 }
@@ -783,7 +781,10 @@ enum Commands {
         command : String,
         },
     /// Inspect a node
-    Inspect {name: String},
+    Inspect {name: String, 
+        #[clap(default_value = "data")] 
+        datafolder: String
+        },
     /// add tags to given nodes
     AddTags {
 
@@ -866,9 +867,9 @@ fn main() {
             db.add_calculation(&name, &command);
             write_database_to_stream(&db);
         }  
-        Commands::Inspect {name} => {
+        Commands::Inspect {name, datafolder} => {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            db.inspect(&name);
+            db.inspect(&name, &datafolder);
         }
         Commands::AddTags { tags, database } => {
             let mut db = get_database_input(database);
