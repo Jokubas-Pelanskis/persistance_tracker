@@ -152,7 +152,9 @@ impl JsonStorage {
     fn add_calculation(&mut self, base_name: &String, command_string: & String ) {
         
         // validate input
-        if self.calculation_nodes.contains_key(base_name) {
+        let base_name_formated = format_data_entry(base_name);
+
+        if self.calculation_nodes.contains_key(&base_name_formated) {
             panic!("Trying to add a calculation with a name that already exists. Aborting. Nothing being written to the database.")
         }
         // ADD MORE VALIDATION. Make sure all inputs have time string attached to them!!!!!
@@ -163,28 +165,18 @@ impl JsonStorage {
         let input_re = Regex::new(r"input\((.*?)\)").expect("failed at creating a regular expression.");
         let output_re: Regex = Regex::new(r"output\((.*?)\)").expect("Failed at creating regulary expression."); // Match 'output(file)'
         
-        let inputs: Vec<String> = input_re
+        let mut inputs: Vec<String> = input_re
             .captures_iter(command_string)
             .map(|cap| cap[1].to_string()) // Get the file name without 'input()'
             .collect();
 
-        let outputs: Vec<String> = output_re
+        let mut outputs: Vec<String> = output_re
             .captures_iter(command_string)
             .map(|cap| cap[1].to_string()) // Get the file name without 'input()'
             .collect();
 
-        // // Add the current time to the input if it does not exist.
-        // let re = Regex::new(r"^\d{16}").unwrap();
 
-        // for i in inputs.len() {
-        //     if re.match(inputs[i]) {
-        //         inp
-        //     }
-
-        // }
-
-
-
+        
         // Format the command string
         
         let mut final_command = command_string.clone();
@@ -197,6 +189,13 @@ impl JsonStorage {
             final_command = final_command.replace(&format!("output({})",value), &format!("output_{}", i));
         }
         
+        // Format the string
+        for name in &mut inputs {
+            *name = format_data_entry(name);
+        }
+        for name in &mut outputs {
+            *name = format_data_entry(name);
+        }
 
         // Check the final command
         // If the final command contains () - panic and crash. Most likely mispelled input
@@ -211,7 +210,7 @@ impl JsonStorage {
         println!("Adding to the database:");
         println!("{}", calculation_node);
         
-        self.calculation_nodes.insert(base_name.to_string(), calculation_node);
+        self.calculation_nodes.insert(base_name_formated.to_string(), calculation_node);
         
         // Create all the data nodes.
         for input in inputs.clone() {
@@ -306,6 +305,28 @@ impl JsonStorage {
 
         
     }
+
+    /// Set tags for the database. Overwrites the old ones
+    fn set_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
+        let node_names: Vec<String> = self.calculation_nodes.keys().cloned().collect();
+
+        for node_name in node_names {
+            let node = self.calculation_nodes.get_mut(&node_name).expect("Failed to find a calculation node.");            
+            node.tags = tag_list.clone();
+
+        }
+
+        let node_names: Vec<String> = self.data_nodes.keys().cloned().collect();
+        for node_name in node_names {
+            let node = self.data_nodes.get_mut(&node_name).expect("Failed to find a calculation node.");
+            node.tags = tag_list.clone();
+        }
+      
+        Ok(())
+
+
+    }
+
 
     /// Remove tags from the database
     fn remove_tags(&mut self, tag_list: &Vec<String>)-> Result<(), String> {
@@ -410,11 +431,11 @@ impl JsonStorage {
 
         for (calc_name, calc_node) in self.calculation_nodes.iter() {
             for inp in &calc_node.calculation.inputs {
-                edges.push((*graph_nodes.get(inp).expect("failed"), *graph_nodes.get(calc_name).expect("failed")));
+                edges.push((*graph_nodes.get(inp).expect("no input found existing in the database for the calculation node."), *graph_nodes.get(calc_name).expect("no input found existing in the database for the calculation node.")));
             }
 
             for outp in &calc_node.calculation.outputs {
-                edges.push((*graph_nodes.get(calc_name).expect("failed"), *graph_nodes.get(outp).expect("failed")));
+                edges.push((*graph_nodes.get(calc_name).expect("no output found existing in the database for the calculation node."), *graph_nodes.get(outp).expect("no output found existing in the database for the calculation node.")));
             }
         }
 
@@ -506,6 +527,69 @@ impl JsonStorage {
         new_graph
     }
 
+    /// Select all nodes that produce a certain file. Select the whole history and return a new graph
+    fn select_node_history(&self, name: &String) -> DiGraph<String, ()> {
+
+        let mut new_graph: DiGraph<String, ()> = DiGraph::new();
+        let (current_graph, current_node_name_map) = self.generate_digraph();
+        let origin_node = current_node_name_map.get(name).expect("Failed to find node in the database!").clone();
+        
+        // Create a mapping between original node indices and new node indices
+        let mut node_mapping: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        
+        // Find all calculation nodes that needed to produce the calculation.
+        for (node_name, node_index) in current_node_name_map.iter() {
+            if self.calculation_nodes.contains_key(node_name) && has_path_connecting(&current_graph, *node_index, origin_node, None) {
+                // Create a new node with an owned String
+                let new_idx = new_graph.add_node(node_name.clone());
+                node_mapping.insert(*node_index, new_idx);
+
+                // Instert calculation nodes inputs and outputs to the mapping
+                for input_name in &self.calculation_nodes.get(node_name).expect("failed to find a calculation node").calculation.inputs {
+                    let new_idx = new_graph.add_node(input_name.clone());
+                    node_mapping.insert(*current_node_name_map.get(input_name).expect("failed to get a node."), new_idx);
+                }
+                for output_name in &self.calculation_nodes.get(node_name).expect("failed to find a calculation node").calculation.outputs {
+                    let new_idx = new_graph.add_node(output_name.clone());
+                    node_mapping.insert(*current_node_name_map.get(output_name).expect("failed to get a node."), new_idx);
+                }
+            }
+        }
+
+
+
+        
+        // Now add the edges between the nodes in the new graph
+        for (node_name, node_index) in current_node_name_map.iter() {
+            if let Some(&new_idx) = node_mapping.get(node_index) {
+                if self.calculation_nodes.contains_key(node_name) {
+                    let calc_node = self.calculation_nodes.get(node_name).expect("failed to get the node.");
+                    
+                    // Add edges for inputs
+                    for inp in &calc_node.calculation.inputs {
+                        if let Some(&input_node) = current_node_name_map.get(inp) {
+                            if let Some(&new_input_idx) = node_mapping.get(&input_node) {
+                                new_graph.add_edge(new_input_idx, new_idx, ());
+                            }
+                        }
+                    }
+                    
+                    // Add edges for outputs
+                    for outp in &calc_node.calculation.outputs {
+                        if let Some(&output_node) = current_node_name_map.get(outp) {
+                            if let Some(&new_output_idx) = node_mapping.get(&output_node) {
+                                new_graph.add_edge(new_idx, new_output_idx, ());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        new_graph
+    }
+
+
     /// Convert Graph to database object within the current database context.
     fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
 
@@ -592,6 +676,32 @@ impl JsonStorage {
 }
 
 
+/// Formats a string to a format compatable for the database
+fn format_data_entry(name: &String) -> String {
+
+    // Add the current time to the input if it does not exist.
+    let re = Regex::new(r"^\d{16}").unwrap();
+
+    // correct branch
+    if re.is_match(name) {
+
+        return name.clone()
+    }
+    else {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Failed to get current system time.")
+            .as_nanos();
+        
+
+        let mut new_name = name.clone();
+        new_name.insert_str(0, &now.to_string());
+        return new_name
+        }
+
+
+
+}
 
 
 
@@ -673,13 +783,19 @@ enum Commands {
     NewCalculation {
         name: String,
         command : String,
-        /// Database in the string format
-        database: Option<String>
         },
     /// Inspect a node
     Inspect {name: String},
     /// add tags to given nodes
     AddTags {
+
+        #[clap(long = "tags", required = true)]
+        tags: Vec<String>,
+        /// Database in the string format
+        database: Option<String>
+    },
+    /// Set all the tags for the given (sub)database.
+    SetTags {
 
         #[clap(long = "tags", required = true)]
         tags: Vec<String>,
@@ -703,12 +819,16 @@ enum Commands {
         database: Option<String>
     },
     SelectSubbranch { name: String, database: Option<String>},
+
+    /// Select all nodes that come to produce a certain node.
+    SelectHistory {name:String, database:Option<String>},
+
     /// Visualize the graph
     Show {
         database: Option<String>
     },
     /// Rename nodes
-    Rename {
+    Copy {
         /// Database in the string format
         database: Option<String>
     },
@@ -743,8 +863,8 @@ fn main() {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             write_database_to_stream(&db);
         }
-        Commands::NewCalculation {name, command, database} => {
-            let mut db = get_database_input(database);
+        Commands::NewCalculation {name, command} => {
+            let mut db =  JsonStorage::default();
             db.add_calculation(&name, &command);
             write_database_to_stream(&db);
         }  
@@ -756,6 +876,12 @@ fn main() {
             let mut db = get_database_input(database);
             db.add_tags( &tags).expect("Faile to add tags");
             write_database_to_stream(&db);
+        }
+        Commands::SetTags { tags, database } => {
+            let mut db = get_database_input(database);
+            db.set_tags( &tags).expect("Failed to set tags");
+            write_database_to_stream(&db);
+
         }
         Commands::RemoveTags {tags, database } => {
             let mut db = get_database_input(database);
@@ -774,6 +900,13 @@ fn main() {
             let new_db = db.digraph_to_database(&graph);
             write_database_to_stream(&new_db);
         }
+        Commands::SelectHistory { name, database } => {
+            let db = get_database_input(database);
+            let graph = db.select_node_history(name);
+            let new_db = db.digraph_to_database(&graph);
+            write_database_to_stream(&new_db);
+
+        }
         Commands::Show { database } => {
             
             // handle the cases when the input is passed directly and when it could by piped.
@@ -782,7 +915,7 @@ fn main() {
             println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
 
         }
-        Commands::Rename {database} => {
+        Commands::Copy {database} => {
             let db = get_database_input(database);
             let copied_db = db.copy_database();
             write_database_to_stream(&copied_db);
