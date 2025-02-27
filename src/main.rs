@@ -3,7 +3,7 @@ use petgraph::visit::EdgeRef;
 use serde::{Serialize, Deserialize};
 use std::fs::File;
 use std::io::{self, Write, Read};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use regex::Regex;
 use std::fmt;
 // Use the graphing tool
@@ -103,8 +103,8 @@ impl NodeTags for CalculationNode {
 /// The main class that defines the whole data storage structure.
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct JsonStorage {
-    calculation_nodes: HashMap<String, CalculationNode>,
-    data_nodes: HashMap<String, DataNode>,
+    calculation_nodes: BTreeMap<String, CalculationNode>,
+    data_nodes: BTreeMap<String, DataNode>,
 }
 
 /// Enum that wraps around datanodes and calculation_nodes
@@ -271,6 +271,27 @@ impl JsonStorage {
 
     }
 
+    /// Get nodes that contain the given substring
+    fn get_similar_nodes(&self, name: &String) -> Vec<String>{
+
+        let mut name_list: Vec<String> = Vec::new();
+
+        for calc_name in self.calculation_nodes.keys() {
+            if calc_name.contains(name) {
+                name_list.push(calc_name.clone());
+            }
+        }
+
+        for node_name in self.data_nodes.keys() {
+            if node_name.contains(name) {
+                name_list.push(node_name.clone());
+            }
+        }
+
+        name_list
+
+    }
+
     /// Add tags to given nodes
     fn add_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
 
@@ -406,10 +427,10 @@ impl JsonStorage {
     }
 
     /// Covert database to a DiGraph (could be a filtered database) to a graph representation for selection of the graph in other ways and plotting too.
-    fn generate_digraph(& self) -> (DiGraph::<&str, &str>, HashMap<String, NodeIndex>){
+    fn generate_digraph(& self) -> (DiGraph::<&str, &str>, BTreeMap<String, NodeIndex>){
         
         let mut graph = DiGraph::<&str, &str>::new(); // initialize the final graph
-        let mut graph_nodes:  HashMap<String, NodeIndex> = HashMap::new(); // node storage thing
+        let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
         let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
         // Create nodes for the graph
@@ -427,11 +448,11 @@ impl JsonStorage {
 
         for (calc_name, calc_node) in self.calculation_nodes.iter() {
             for inp in &calc_node.calculation.inputs {
-                edges.push((*graph_nodes.get(inp).expect("no input found existing in the database for the calculation node."), *graph_nodes.get(calc_name).expect("no input found existing in the database for the calculation node.")));
+                edges.push((*graph_nodes.get(inp).expect(&format!("input {} found for {} calculation", &inp, &calc_name)), *graph_nodes.get(calc_name).expect(&format!("input {} found for {} calculation", &inp, &calc_name))));
             }
 
             for outp in &calc_node.calculation.outputs {
-                edges.push((*graph_nodes.get(calc_name).expect("no output found existing in the database for the calculation node."), *graph_nodes.get(outp).expect("no output found existing in the database for the calculation node.")));
+                edges.push((*graph_nodes.get(calc_name).expect(&format!("input {} found for {} calculation", &outp, &calc_name)), *graph_nodes.get(outp).expect(&format!("input {} found for {} calculation", &outp, &calc_name))));
             }
         }
 
@@ -441,10 +462,10 @@ impl JsonStorage {
     }
 
     /// Similar to the previous one, but generates undirected graph.
-    fn generate_ungraph(& self) -> (UnGraph::<&str, ()>, HashMap<String, NodeIndex>){
+    fn generate_ungraph(& self) -> (UnGraph::<&str, ()>, BTreeMap<String, NodeIndex>){
         
         let mut graph = UnGraph::<&str, ()>::new_undirected(); // initialize the final graph
-        let mut graph_nodes:  HashMap<String, NodeIndex> = HashMap::new(); // node storage thing
+        let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
         let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
         // Create nodes for the graph
@@ -482,7 +503,7 @@ impl JsonStorage {
         let origin_node = current_node_name_map.get(name).expect("Failed to find node in the database!").clone();
         
         // Create a mapping between original node indices and new node indices
-        let mut node_mapping: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        let mut node_mapping: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
         
         // First, add all connected nodes to the new graph
         for (node_name, node_index) in current_node_name_map.iter() {
@@ -531,7 +552,7 @@ impl JsonStorage {
         let origin_node = current_node_name_map.get(name).expect("Failed to find node in the database!").clone();
         
         // Create a mapping between original node indices and new node indices
-        let mut node_mapping: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        let mut node_mapping: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
         
         // Find all calculation nodes that needed to produce the calculation.
         for (node_name, node_index) in current_node_name_map.iter() {
@@ -589,8 +610,8 @@ impl JsonStorage {
     /// Convert Graph to database object within the current database context.
     fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
 
-        let mut calculation_nodes: HashMap<String, CalculationNode> = HashMap::new();
-        let mut data_nodes: HashMap<String, DataNode> = HashMap::new();
+        let mut calculation_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
+        let mut data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
 
         for node_id in graph.node_indices() {
             let node_name = graph.node_weight(node_id).expect("Failed to get a node name");
@@ -612,9 +633,9 @@ impl JsonStorage {
     /// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
     /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
     fn copy_database(& self) -> JsonStorage {
-        let mut new_data_nodes: HashMap<String, DataNode> = HashMap::new();
-        let mut new_calc_nodes: HashMap<String, CalculationNode> = HashMap::new();
-        let mut rename_map: HashMap<String, String> = HashMap::new();
+        let mut new_data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
+        let mut new_calc_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
+        let mut rename_map: BTreeMap<String, String> = BTreeMap::new();
         let re = Regex::new(r"^\d+").unwrap();
         
         // Go through all the data nodes.
@@ -775,6 +796,12 @@ enum Commands {
     /// Get the database and inject that into the stdout.
     Get,
 
+    /// Get Nodes that have a given substring
+    GetSimilar {
+        name:String,
+        database: Option<String>
+    },
+
     /// Add a calculation to the database.
     NewCalculation {
         name: String,
@@ -786,26 +813,26 @@ enum Commands {
         datafolder: String
         },
     /// add tags to given nodes
-    AddTags {
+    AddTag {
 
-        #[clap(long = "tags", required = true)]
-        tags: Vec<String>,
+        #[clap(long = "tag", required = true)]
+        tag: Vec<String>,
         /// Database in the string format
         database: Option<String>
     },
     /// Set all the tags for the given (sub)database.
     SetTags {
 
-        #[clap(long = "tags", required = true)]
+        #[clap(long = "tag", required = true)]
         tags: Vec<String>,
         /// Database in the string format
         database: Option<String>
     },
     /// Remove tags to given nodes
-    RemoveTags {
+    RemoveTag {
 
-        #[clap(long = "tags", required = true)]
-        tags: Vec<String>,
+        #[clap(long = "tag", required = true)]
+        tag: Vec<String>,
         /// Database in the string format
         database: Option<String>
     },
@@ -851,9 +878,9 @@ fn main() {
 
             let copy_manager = CopyManager {name: "test".to_string(), origin: "another_test".to_string()};
             
-            let mut calculation_nodes = HashMap::new();
+            let mut calculation_nodes = BTreeMap::new();
             calculation_nodes.insert("test".to_string(), CalculationNode{git_hash: "".to_string(), tags: Vec::new(), calculation: calculation_manager, copy: copy_manager});
-            let mut data_nodes = HashMap::new();
+            let mut data_nodes = BTreeMap::new();
             data_nodes.insert("test_data".to_string(), DataNode{save:true, tags:Vec::new(), copy: CopyManager::default()});                                                
             let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
             default_struct.write_database(&JSONDATABASE.to_string());
@@ -861,6 +888,15 @@ fn main() {
         Commands::Get  => {
             let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             write_database_to_stream(&db);
+        }
+        Commands::GetSimilar {name, database} => {
+            let db = get_database_input(database);
+            let name_list = db.get_similar_nodes(&name);
+
+            for name in name_list {
+                println!("{}",name);
+            }
+
         }
         Commands::NewCalculation {name, command} => {
             let mut db =  JsonStorage::default();
@@ -871,9 +907,9 @@ fn main() {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.inspect(&name, &datafolder);
         }
-        Commands::AddTags { tags, database } => {
+        Commands::AddTag { tag, database } => {
             let mut db = get_database_input(database);
-            db.add_tags( &tags).expect("Faile to add tags");
+            db.add_tags( &tag).expect("Faile to add tags");
             write_database_to_stream(&db);
         }
         Commands::SetTags { tags, database } => {
@@ -882,9 +918,9 @@ fn main() {
             write_database_to_stream(&db);
 
         }
-        Commands::RemoveTags {tags, database } => {
+        Commands::RemoveTag {tag, database } => {
             let mut db = get_database_input(database);
-            db.remove_tags(&tags).expect("Faile to add tags");
+            db.remove_tags(&tag).expect("Faile to add tags");
             write_database_to_stream(&db);
         }
         Commands::SelectTag { tags, database } => {
