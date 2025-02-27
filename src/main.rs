@@ -37,12 +37,12 @@ impl CalculationManager {
 
         for (i, filename) in self.outputs.iter().enumerate() {
             let full_filename = relative_path.join(filename).to_string_lossy().to_string();
-            final_command = final_command.replace(&format!("output_{}", i), &full_filename);
+            final_command = final_command.replace(&format!("$output_{}", i), &full_filename);
         }
 
         for (i, filename) in self.inputs.iter().enumerate() {
             let full_filename = relative_path.join(filename).to_string_lossy().to_string();
-            final_command = final_command.replace(&format!("input_{}", i), &full_filename);
+            final_command = final_command.replace(&format!("$input_{}", i), &full_filename);
         }
         final_command
 
@@ -180,11 +180,11 @@ impl JsonStorage {
         let mut final_command = command_string.clone();
         
         for (i, value) in inputs.iter().enumerate() {
-            final_command = final_command.replace(&format!("input({})",value), &format!("input_{}", i));
+            final_command = final_command.replace(&format!("input({})",value), &format!("$input_{}", i));
         }
         
         for (i, value) in outputs.iter().enumerate() {
-            final_command = final_command.replace(&format!("output({})",value), &format!("output_{}", i));
+            final_command = final_command.replace(&format!("output({})",value), &format!("$output_{}", i));
         }
         
         // Format the string
