@@ -1,4 +1,5 @@
 use clap::{Parser,Subcommand};
+use petgraph::data;
 use petgraph::visit::EdgeRef;
 use serde::{Serialize, Deserialize};
 use std::fs::File;
@@ -382,7 +383,7 @@ impl JsonStorage {
     }
 
     /// Returns a filtered with nodes that only have a certain tag.
-    fn filter_by_tags(& self, external_tag_list: &Vec<String>) -> JsonStorage{
+    fn filter_by_tags(& self, tags_to_include: &Vec<String>, tags_to_exclude : &Vec<String>) -> JsonStorage{
 
         // create an emtyp object
         let mut filtered_database = JsonStorage::default();
@@ -392,9 +393,17 @@ impl JsonStorage {
             let mut overlap = false;
              // NOTE: this uses the simplest to implement algorithm: Could convert to a hashSet, or maybe sorting two-pointer approach
             for tag1 in &node.tags {
-                for tag2 in external_tag_list {
+                for tag2 in tags_to_include {
                     if tag1 == tag2 {
                         overlap = true;
+                    }
+                }
+            }
+
+            for tag1 in &node.tags {
+                for tag2 in tags_to_exclude {
+                    if tag1 == tag2 {
+                        overlap = false;
                     }
                 }
             }
@@ -409,9 +418,16 @@ impl JsonStorage {
             let mut overlap = false;
              // NOTE: this uses the simplest to implement algorithm: Could convert to a hashSet, or maybe sorting two-pointer approach
             for tag1 in &node.tags {
-                for tag2 in external_tag_list {
+                for tag2 in tags_to_include {
                     if tag1 == tag2 {
                         overlap = true;
+                    }
+                }
+            }
+            for tag1 in &node.tags {
+                for tag2 in tags_to_exclude {
+                    if tag1 == tag2 {
+                        overlap = false;
                     }
                 }
             }
@@ -448,11 +464,19 @@ impl JsonStorage {
 
         for (calc_name, calc_node) in self.calculation_nodes.iter() {
             for inp in &calc_node.calculation.inputs {
-                edges.push((*graph_nodes.get(inp).expect(&format!("input {} found for {} calculation", &inp, &calc_name)), *graph_nodes.get(calc_name).expect(&format!("input {} found for {} calculation", &inp, &calc_name))));
+                match graph_nodes.get(inp) {
+                    Some(value) => {edges.push((*value, *graph_nodes.get(calc_name).expect(&format!("input {} found for {} calculation", &inp, &calc_name))))}
+                    None => {}
+                }
+
             }
 
             for outp in &calc_node.calculation.outputs {
-                edges.push((*graph_nodes.get(calc_name).expect(&format!("input {} found for {} calculation", &outp, &calc_name)), *graph_nodes.get(outp).expect(&format!("input {} found for {} calculation", &outp, &calc_name))));
+                match graph_nodes.get(outp) {
+                    Some(value) => {edges.push((*graph_nodes.get(calc_name).expect(&format!("input {} found for {} calculation", &outp, &calc_name)), *value))},
+                    None => {}
+                } 
+                
             }
         }
 
@@ -483,11 +507,19 @@ impl JsonStorage {
 
         for (calc_name, calc_node) in self.calculation_nodes.iter() {
             for inp in &calc_node.calculation.inputs {
-                edges.push((*graph_nodes.get(inp).expect("failed"), *graph_nodes.get(calc_name).expect("failed")));
+                // It could be a case that I have filtered some outputs or inputs. In this case do nothing
+                match graph_nodes.get(inp) {
+                    Some(value) => {edges.push((*value, *graph_nodes.get(calc_name).expect("failed")))},
+                    None => {}
+                }
             }
 
             for outp in &calc_node.calculation.outputs {
-                edges.push((*graph_nodes.get(calc_name).expect("failed"), *graph_nodes.get(outp).expect("failed")));
+                match graph_nodes.get(calc_name) {
+                    Some(value) => {edges.push((*graph_nodes.get(calc_name).expect("failed"), *value))},
+                    None => {}
+                }
+
             }
         }
 
@@ -619,9 +651,11 @@ impl JsonStorage {
             // handle the calculation node 
             if self.calculation_nodes.contains_key(node_name) {
                 calculation_nodes.insert(node_name.clone(), self.calculation_nodes.get(node_name).expect("failed").clone());
+                continue
             }   
-            else {
+            if self.data_nodes.contains_key(node_name) {
                 data_nodes.insert(node_name.clone(), self.data_nodes.get(node_name).expect("failed").clone());
+                continue
             }
         }
 
@@ -629,10 +663,26 @@ impl JsonStorage {
     }
 
     /// Select nodes by the given name
-    fn select_by_name(&self) -> JsonStorage{
+    fn select_by_name(&self, name_list: &Vec<String>) -> JsonStorage{
+
+        let mut calculation_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
+        let mut data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
+
+        for node_name in name_list {
+            if self.calculation_nodes.contains_key(node_name) {
+                calculation_nodes.insert(node_name.clone(), self.calculation_nodes.get(node_name).expect("failed to get a key").clone());
+            }
+        }
+
+        for node_name in name_list {
+            if self.data_nodes.contains_key(node_name) {
+                data_nodes.insert(node_name.clone(), self.data_nodes.get(node_name).expect("failed to get a key").clone());
+            }
+        }
+
+        JsonStorage {calculation_nodes: calculation_nodes, data_nodes : data_nodes}
 
 
-        
     }
 
     /// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
@@ -875,8 +925,12 @@ enum Commands {
     },
     /// Select nodes by tag
     SelectTag {
-        #[clap(long = "tag", required = true)]
+        /// Tags to include
+        #[clap(long = "tag", default_values_t = Vec::<String>::new())]
         tags:Vec<String>,
+        /// Tags to exclude
+        #[clap(long = "notag",default_values_t = Vec::<String>::new())]
+        notags:Vec<String>,
 
         /// Database in the string format
         database: Option<String>
@@ -885,6 +939,14 @@ enum Commands {
 
     /// Select all nodes that come to produce a certain node.
     SelectHistory {name:String, database:Option<String>},
+
+    /// Select a part of the database by name
+    SelectName {        
+        #[clap(long = "name", required = true)]
+        names:Vec<String>,
+
+        /// Database in the string format
+        database: Option<String>},
 
     /// Visualize the graph
     Show {
@@ -965,10 +1027,10 @@ fn main() {
             db.remove_tags(&tag).expect("Faile to add tags");
             write_database_to_stream(&db);
         }
-        Commands::SelectTag { tags, database } => {
+        Commands::SelectTag { tags, notags, database } => {
             
             let db = get_database_input(database);
-            let new_db = db.filter_by_tags(tags);
+            let new_db = db.filter_by_tags(tags, notags);
             write_database_to_stream(&new_db);
         }
         Commands::SelectSubbranch { name , database} => {
@@ -1011,6 +1073,11 @@ fn main() {
             let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
             db.delete(names);
             db.write_database(JSONDATABASE);
+        }
+        Commands::SelectName { names, database } => {
+            let db = get_database_input(database);
+            let copied_db = db.select_by_name(names);
+            write_database_to_stream(&copied_db);
         }
     }
 }
