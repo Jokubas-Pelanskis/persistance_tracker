@@ -628,7 +628,12 @@ impl JsonStorage {
         JsonStorage {calculation_nodes : calculation_nodes, data_nodes : data_nodes}
     }
 
+    /// Select nodes by the given name
+    fn select_by_name(&self) -> JsonStorage{
 
+
+        
+    }
 
     /// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
     /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
@@ -687,6 +692,38 @@ impl JsonStorage {
         };
 
         new_db
+    }
+
+    /// Deletes nodes from the database.
+    /// For the calculation nodes also delete all outputs
+    fn delete(&mut self, node_names: &Vec<String>) {
+        
+        let mut remove_calculation_nodes : Vec<&String> = Vec::new(); 
+
+        for node_name in node_names {
+            if self.calculation_nodes.contains_key(node_name) {
+                remove_calculation_nodes.push(node_name)
+            }
+        }
+        
+        for remove_node in remove_calculation_nodes {
+            self.calculation_nodes.remove(remove_node);
+        }
+
+
+        let mut remove_data_nodes : Vec<&String> = Vec::new(); 
+
+        for node_name in node_names {
+            if self.data_nodes.contains_key(node_name) {
+                remove_data_nodes.push(node_name)
+            }
+        }
+        
+        for remove_node in remove_data_nodes {
+            self.data_nodes.remove(remove_node);
+        }
+
+
     }
 
 
@@ -863,6 +900,11 @@ enum Commands {
     Add {
         /// Database passed from the coomand line
         database: Option<String>
+    },
+    /// delete named nodes from the database
+    Delete {
+        #[clap(long = "name", required = true)]
+        names:Vec<String>,
     }
 
 }
@@ -964,6 +1006,11 @@ fn main() {
             db.add_database(&db_std);
             db.write_database(JSONDATABASE);
 
+        }
+        Commands::Delete { names } => {
+            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            db.delete(names);
+            db.write_database(JSONDATABASE);
         }
     }
 }
