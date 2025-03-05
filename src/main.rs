@@ -816,6 +816,11 @@ impl JsonStorage {
 
     }
 
+    /// Copies all outgoing nodes for a given database and attaches the same nodes (copied) to the destination
+    fn copy_node_future(& self, origin : &String, destination: &String) -> JsonStorage {
+
+        panic!("not implemented")
+    }
 
 }
 
@@ -1025,6 +1030,15 @@ enum Commands {
     Delete {
         #[clap(long = "name", required = true)]
         names:Vec<String>,
+    },
+
+    /// Find all outgoing nodes from one node and create a copy on some other node
+    /// Used to quickly create calculations for new modifications
+    ReplicateFuture {
+        origin: String,
+        destination: String,
+        /// Database in the string format
+        database: Option<String>
     }
 
 }
@@ -1137,6 +1151,12 @@ fn main() {
         Commands::SelectName { names, database } => {
             let db = get_database_input(database);
             let copied_db = db.select_by_name(names);
+            write_database_to_stream(&copied_db);
+        }
+        Commands::ReplicateFuture { origin, destination, database } => {
+
+            let db = get_database_input(database);
+            let copied_db = db.copy_node_future(origin, destination);
             write_database_to_stream(&copied_db);
         }
     }
