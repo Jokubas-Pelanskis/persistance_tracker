@@ -48,6 +48,39 @@ impl CalculationManager {
         final_command
 
     }
+
+    /// Generate a string that fills in most of the details for generating new things.
+    /// Keep input the same; but strip the outputs
+    fn get_program_template(& self) -> String {
+
+        let mut final_command = self.program.clone();
+        let re = Regex::new(r"^(\d+)(.+)").expect("Failed to compile regular expression.");
+
+        for (i, filename) in self.inputs.iter().enumerate() {
+            let full_filename = format!("input({})", filename);
+            final_command = final_command.replace(&format!("$input_{}", i), &full_filename);
+        }
+
+        for (i, filename) in self.outputs.iter().enumerate() {
+            
+            let filename = match re.captures(filename) {
+                Some(value) =>{
+                    value
+                    .get(2)
+                    .expect("Failed to get the string. Something is wrong with string formating!")
+                    .as_str()
+                },
+                None => panic!("Bad string format! Every string should begin with digits indicating unique timestamp.")
+            };
+
+            let full_filename = format!("output({})",filename);
+            final_command = final_command.replace(&format!("$output_{}", i), &full_filename);
+        }   
+
+        final_command
+    }
+
+
 }
 
 
@@ -74,7 +107,6 @@ struct DataNode {
     tags: Vec<String>,
     copy: CopyManager,
 }
-
 
 /// add a trait for adding tags
 trait NodeTags {
@@ -137,6 +169,7 @@ impl JsonStorage {
     
     /// Merge two databases
     /// This overwrites the nodes if there are clashes. This would be used if want to add tags and then save the results
+    /// TODO: Add different modes of addition - if there is a node with the same name being added, I could either overwrite or combine the tags.
     fn add_database(&mut self, other_db: &JsonStorage) {
         for (calc_name, calc_node) in other_db.calculation_nodes.iter() {
             self.calculation_nodes.insert(calc_name.clone(), calc_node.clone());
@@ -145,6 +178,7 @@ impl JsonStorage {
         for (data_name, data_node) in other_db.data_nodes.iter() {
             self.data_nodes.insert(data_name.clone(), data_node.clone());
         }
+
     }
 
     /// Add a new calculation to the database
@@ -233,9 +267,14 @@ impl JsonStorage {
                 match node {
                     Node::Calculation(calculation_node) => {
                         println!("Calculation node:{}", name);
+                        println!("Tags: {:?}", calculation_node.tags);
+                        println!("graphr new-calculation {} \"{}\"", get_calculation_basename(name).expect("Failed to capture"), calculation_node.calculation.get_program_template());
                         println!("{}", calculation_node.calculation.get_full_program(data_folder));
                     }
-                    Node::Data(data_node) =>  {println!("Data node: {}.", name);}
+                    Node::Data(data_node) =>  {
+                        println!("Tags: {:?}", data_node.tags);
+                        println!("Data node: {}.", name);
+                    }
                 }
             }
             Err(e) => panic!("{}",e .to_string())
@@ -706,7 +745,8 @@ impl JsonStorage {
             rename_map.insert(node_name.clone(), new_name.clone());
             new_data_nodes.insert(new_name, node_obj.clone());
         }
-
+        
+        // Go through all calculation nodes
         for (calc_name, calc_obj) in self.calculation_nodes.iter() {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -720,7 +760,7 @@ impl JsonStorage {
             // Update inputs with new names
             let mut updated_inputs = Vec::new();
             for inp in &new_calc_node.calculation.inputs {
-                let new_inp = rename_map.get(inp).expect("Failed to find input in rename map");
+                let new_inp = rename_map.get(inp).expect(&format!("Failed to find output ({}) in rename map for calculation ({})", inp, calc_name));
                 updated_inputs.push(new_inp.clone());
             }
             new_calc_node.calculation.inputs = updated_inputs;
@@ -728,7 +768,7 @@ impl JsonStorage {
             // Update outputs with new names
             let mut updated_outputs = Vec::new();
             for outp in &new_calc_node.calculation.outputs {
-                let new_outp = rename_map.get(outp).expect("Failed to find output in rename map");
+                let new_outp = rename_map.get(outp).expect(&format!("Failed to find output ({}) in rename map for calculation ({})", outp, calc_name));
                 updated_outputs.push(new_outp.clone());
             }
             new_calc_node.calculation.outputs = updated_outputs;
@@ -864,6 +904,24 @@ fn write_database_to_stream(database: &JsonStorage){
 
 }
 
+/// Given a calculation name extarcts the basename (removes initial digits)
+fn get_calculation_basename(name : &String) -> Result<String, &str> {
+
+    let re = Regex::new(r"^(\d+)(.+)").expect("Failed to compile regular expression.");
+
+    match re.captures(&name) {
+        Some(value) => {
+            match value.get(2) {
+                Some(value) => {
+                    return Ok(value.as_str().to_string())
+                }
+                None => {return Err("could not capture the string. Wrong formatting!")}
+            }
+        }
+        None => {return Err("Wrong string format!")}
+    }
+
+}
 
 
 /// Command line interface
@@ -1067,6 +1125,8 @@ fn main() {
             // combine
             db.add_database(&db_std);
             db.write_database(JSONDATABASE);
+
+            write_database_to_stream(&db_std);
 
         }
         Commands::Delete { names } => {
