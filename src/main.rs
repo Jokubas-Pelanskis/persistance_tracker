@@ -677,7 +677,11 @@ impl JsonStorage {
         new_graph
     }
 
+    /// Copies all outgoing nodes for a given database and attaches the same nodes (copied) to the destination
+    fn select_node_future(& self, origin : &String, destination: &String) -> JsonStorage {
 
+        panic!("not implemented")
+    }
     /// Convert Graph to database object within the current database context.
     fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
 
@@ -726,10 +730,23 @@ impl JsonStorage {
 
     /// Creates new calculations by copying the current database. (This should be used in conjunction with selection operators.)
     /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
-    fn copy_database(& self) -> JsonStorage {
+    /// reattchements - Should define all loose ends (for example inputs that are not present in the copy, but a calculation node needs it.)
+    /// if an input node is not in the reattachements and not in the provided database - then a new node is created, if it's an output, then it creates a new node with no tags. If needed tags can always be added again.
+    fn copy_database(& self, reattachments: &Vec<[String; 2]> ) -> JsonStorage {
+
+
+
         let mut new_data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
         let mut new_calc_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
         let mut rename_map: BTreeMap<String, String> = BTreeMap::new();
+
+        for attechement in reattachments {
+            rename_map.insert(attechement[0].clone(), attechement[1].clone());
+        }
+
+
+        // add reattachements to the rename_map
+
         let re = Regex::new(r"^\d+").unwrap();
         
         // Go through all the data nodes.
@@ -760,7 +777,15 @@ impl JsonStorage {
             // Update inputs with new names
             let mut updated_inputs = Vec::new();
             for inp in &new_calc_node.calculation.inputs {
-                let new_inp = rename_map.get(inp).expect(&format!("Failed to find output ({}) in rename map for calculation ({})", inp, calc_name));
+                
+                let new_inp = match rename_map.get(inp) {
+                    Some(value) => value,
+                    None => {
+                        // Node is not in the database or extra renames. Use the same name
+                        inp
+                    }
+                };
+
                 updated_inputs.push(new_inp.clone());
             }
             new_calc_node.calculation.inputs = updated_inputs;
@@ -768,7 +793,12 @@ impl JsonStorage {
             // Update outputs with new names
             let mut updated_outputs = Vec::new();
             for outp in &new_calc_node.calculation.outputs {
-                let new_outp = rename_map.get(outp).expect(&format!("Failed to find output ({}) in rename map for calculation ({})", outp, calc_name));
+
+                let new_outp = match rename_map.get(outp) {
+                    Some(value) => value,
+                    None => outp
+                };
+
                 updated_outputs.push(new_outp.clone());
             }
             new_calc_node.calculation.outputs = updated_outputs;
@@ -816,11 +846,7 @@ impl JsonStorage {
 
     }
 
-    /// Copies all outgoing nodes for a given database and attaches the same nodes (copied) to the destination
-    fn copy_node_future(& self, origin : &String, destination: &String) -> JsonStorage {
 
-        panic!("not implemented")
-    }
 
 }
 
@@ -1017,7 +1043,13 @@ enum Commands {
     },
     /// Rename nodes
     Copy {
-        /// Database in the string format
+        #[arg(
+            long = "attach", 
+            num_args = 2,  // Requires exactly 2 values per occurrence
+            help = "Specify a pair of names to attach (requires exactly 2 names)",
+        )]
+        attach: Option<Vec<String>>,
+
         database: Option<String>
     },
 
@@ -1126,9 +1158,22 @@ fn main() {
             println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
 
         }
-        Commands::Copy {database} => {
+        Commands::Copy {attach, database} => {
+
+        let attach_parsed = match attach {
+            Some(value) => {
+                // Filter to only include complete pairs and convert each chunk to a tuple
+                value.chunks(2)
+                    .map(|chunk| [chunk.get(0).expect("failed to get second value for the chunk.").clone(), chunk.get(1).expect("failed to get second value for the chunk.").clone()])
+                    .collect::<Vec<[String;2]>>()
+            }
+            None => {
+                Vec::new()
+            }
+        };
+
             let db = get_database_input(database);
-            let copied_db = db.copy_database();
+            let copied_db = db.copy_database(&attach_parsed);
             write_database_to_stream(&copied_db);
 
         }
@@ -1156,7 +1201,7 @@ fn main() {
         Commands::ReplicateFuture { origin, destination, database } => {
 
             let db = get_database_input(database);
-            let copied_db = db.copy_node_future(origin, destination);
+            let copied_db = db.select_node_future(origin, destination);
             write_database_to_stream(&copied_db);
         }
     }
