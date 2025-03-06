@@ -744,11 +744,13 @@ impl JsonStorage {
             rename_map.insert(attechement[0].clone(), attechement[1].clone());
         }
 
-
         // add reattachements to the rename_map
 
         let re = Regex::new(r"^\d+").unwrap();
         
+        //----------------------------
+        // Create the rename map
+        //----------------------------
         // Go through all the data nodes.
         for (node_name, node_obj) in self.data_nodes.iter() {
             // current time
@@ -760,7 +762,6 @@ impl JsonStorage {
             let new_name = re.replace(node_name, now.to_string()).to_string();
 
             rename_map.insert(node_name.clone(), new_name.clone());
-            new_data_nodes.insert(new_name, node_obj.clone());
         }
         
         // Go through all calculation nodes
@@ -771,6 +772,25 @@ impl JsonStorage {
                 .as_nanos();
             let new_name = re.replace(calc_name, now.to_string()).to_string();
             rename_map.insert(calc_name.clone(), new_name.clone());
+        }
+
+        // Overwrite the manual
+        for attechement in reattachments {
+            rename_map.insert(attechement[0].clone(), attechement[1].clone());
+        }
+
+        //----------------------------
+        // Create the new database object
+        //----------------------------
+
+        // Create new Data nodes
+        for (node_name, node_obj) in self.data_nodes.iter() {
+            new_data_nodes.insert(rename_map.get(node_name).expect("failed").clone(), node_obj.clone());
+
+        }
+
+        // Create new caluclation nodes
+        for (calc_name, calc_obj) in self.calculation_nodes.iter() {
 
             let mut new_calc_node = calc_obj.clone();
 
@@ -803,9 +823,13 @@ impl JsonStorage {
             }
             new_calc_node.calculation.outputs = updated_outputs;
 
-            new_calc_nodes.insert(new_name, new_calc_node);
+            new_calc_nodes.insert(rename_map.get(calc_name).expect("failed").clone(), new_calc_node);
         }
 
+
+
+
+        
         let new_db = JsonStorage {
             calculation_nodes: new_calc_nodes,
             data_nodes: new_data_nodes,
