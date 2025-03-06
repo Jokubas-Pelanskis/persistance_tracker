@@ -678,9 +678,69 @@ impl JsonStorage {
     }
 
     /// Copies all outgoing nodes for a given database and attaches the same nodes (copied) to the destination
-    fn select_node_future(& self, origin : &String, destination: &String) -> JsonStorage {
+    fn select_node_future(& self, name : &String) -> DiGraph<String, ()> {
 
-        panic!("not implemented")
+        let mut new_graph: DiGraph<String, ()> = DiGraph::new();
+        let  (mut current_graph, current_node_name_map) = self.generate_digraph();
+
+        current_graph.reverse();
+
+        let origin_node = current_node_name_map.get(name).expect("Failed to find node in the database!").clone();
+        
+        // Create a mapping between original node indices and new node indices
+        let mut node_mapping: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+        
+        // Find all calculation nodes that needed to produce the calculation.
+        for (node_name, node_index) in current_node_name_map.iter() {
+            if self.calculation_nodes.contains_key(node_name) && has_path_connecting(&current_graph, *node_index, origin_node, None) {
+                // Create a new node with an owned String
+                let new_idx = new_graph.add_node(node_name.clone());
+                node_mapping.insert(*node_index, new_idx);
+
+                // Instert calculation nodes inputs and outputs to the mapping
+                for input_name in &self.calculation_nodes.get(node_name).expect("failed to find a calculation node").calculation.inputs {
+                    let new_idx = new_graph.add_node(input_name.clone());
+                    node_mapping.insert(*current_node_name_map.get(input_name).expect("failed to get a node."), new_idx);
+                }
+                for output_name in &self.calculation_nodes.get(node_name).expect("failed to find a calculation node").calculation.outputs {
+                    let new_idx = new_graph.add_node(output_name.clone());
+                    node_mapping.insert(*current_node_name_map.get(output_name).expect("failed to get a node."), new_idx);
+                }
+            }
+        }
+
+
+
+        
+        // Now add the edges between the nodes in the new graph
+        for (node_name, node_index) in current_node_name_map.iter() {
+            if let Some(&new_idx) = node_mapping.get(node_index) {
+                if self.calculation_nodes.contains_key(node_name) {
+                    let calc_node = self.calculation_nodes.get(node_name).expect("failed to get the node.");
+                    
+                    // Add edges for inputs
+                    for inp in &calc_node.calculation.inputs {
+                        if let Some(&input_node) = current_node_name_map.get(inp) {
+                            if let Some(&new_input_idx) = node_mapping.get(&input_node) {
+                                new_graph.add_edge(new_input_idx, new_idx, ());
+                            }
+                        }
+                    }
+                    
+                    // Add edges for outputs
+                    for outp in &calc_node.calculation.outputs {
+                        if let Some(&output_node) = current_node_name_map.get(outp) {
+                            if let Some(&new_output_idx) = node_mapping.get(&output_node) {
+                                new_graph.add_edge(new_idx, new_output_idx, ());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        new_graph.reverse();
+        new_graph
     }
     /// Convert Graph to database object within the current database context.
     fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
@@ -1090,9 +1150,8 @@ enum Commands {
 
     /// Find all outgoing nodes from one node and create a copy on some other node
     /// Used to quickly create calculations for new modifications
-    ReplicateFuture {
-        origin: String,
-        destination: String,
+    SelectFuture {
+        name:String,
         /// Database in the string format
         database: Option<String>
     }
@@ -1222,11 +1281,12 @@ fn main() {
             let copied_db = db.select_by_name(names);
             write_database_to_stream(&copied_db);
         }
-        Commands::ReplicateFuture { origin, destination, database } => {
+        Commands::SelectFuture { name, database } => {
 
             let db = get_database_input(database);
-            let copied_db = db.select_node_future(origin, destination);
-            write_database_to_stream(&copied_db);
+            let graph = db.select_node_future(name);
+            let new_db = db.digraph_to_database(&graph);
+            write_database_to_stream(&new_db);
         }
     }
 }
