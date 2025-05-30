@@ -1,7 +1,6 @@
 use petgraph::data;
 use petgraph::visit::EdgeRef;
 use serde::{Serialize, Deserialize};
-use std::fs::File;
 use std::io::{self, Write, Read};
 use std::collections::BTreeMap;
 use regex::Regex;
@@ -16,6 +15,7 @@ use serde_json::{Value, Map};
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::fs::{self, File};
 // Create a new database stucture for storing all the json data
 
 
@@ -330,16 +330,14 @@ impl JsonStorage {
         }
 
     }
-
-}
-
-
-/// Expose functions
-impl JsonStorage {
-
-    pub fn write_database(&self, filename: &str) -> Result<(), io::Error>{
-        let mut file = File::create(filename)?; 
+    
+    pub fn write(&self, folder: &str) -> Result<(), io::Error>{
+        let path = Path::new(&folder).join(".graph/graph.json");
         
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = File::create(&path)?; 
         let write_string = match serde_json::to_string_pretty(self){
             Ok(string) => string,
             Err(e) => panic!("Failed to serialize the databes. Aborting!")
@@ -347,6 +345,13 @@ impl JsonStorage {
         file.write_all(write_string.as_bytes())?;
         Ok(())
     }
+
+}
+
+
+/// Expose functions
+impl JsonStorage {
+
 
     /// Add a new calculation to the database
     pub fn add_calculation(&mut self, base_name: &String, command_string: & String ) {

@@ -140,10 +140,10 @@ fn main() {
             let mut data_nodes = BTreeMap::new();
             data_nodes.insert("test_data".to_string(), DataNode{save:true, tags:Vec::new(), copy: CopyManager::default()});                                                
             let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
-            default_struct.write_database(&JSONDATABASE.to_string());
+            default_struct.write(&"".to_string());
         }
         Commands::Get  => {
-            let db = JsonStorage::new(JSONDATABASE.to_string());
+            let db = JsonStorage::new("".to_string());
             write_database_to_stream(&db);
         }
         Commands::GetSimilar {name, database} => {
@@ -161,7 +161,7 @@ fn main() {
             write_database_to_stream(&db);
         }  
         Commands::Inspect {name, datafolder} => {
-            let mut db = JsonStorage::new(JSONDATABASE.to_string());
+            let mut db = JsonStorage::new("".to_string());
             db.inspect(&name, &datafolder);
         }
         Commands::AddTag { tag, database } => {
@@ -234,20 +234,20 @@ fn main() {
 
         }
         Commands::Add {database} =>{
-            let mut db = JsonStorage::new(JSONDATABASE.to_string());
+            let mut db = JsonStorage::new("".to_string());
             let db_std = get_database_input(database);
  
             // combine
             db.add(&db_std);
-            db.write_database(JSONDATABASE);
+            db.write(JSONDATABASE);
 
             write_database_to_stream(&db_std);
 
         }
         Commands::Delete { names } => {
-            let mut db = JsonStorage::new(JSONDATABASE.to_string());
+            let mut db = JsonStorage::new("".to_string());
             db.delete(names);
-            db.write_database(JSONDATABASE);
+            db.write(JSONDATABASE);
         }
         Commands::SelectName { names, database } => {
             let db = get_database_input(database);
