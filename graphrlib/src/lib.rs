@@ -12,10 +12,15 @@ use petgraph::dot::{Dot, Config};
 use petgraph::algo::has_path_connecting;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::{Path, PathBuf};
+use serde_json::{Value, Map};
+
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 // Create a new database stucture for storing all the json data
 
 
 /// Manages inputs, outputs and the command to run
+#[pyclass]
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
 pub struct CalculationManager {
     pub inputs: Vec<String>,
@@ -23,6 +28,18 @@ pub struct CalculationManager {
     pub program: String
 }
 
+#[pymethods]
+impl CalculationManager {
+    pub fn to_dict(&self, py: Python) -> PyResult<PyObject> {
+
+        let dict = PyDict::new(py);
+        dict.set_item("inputs", &self.inputs)?;
+        dict.set_item("outputs", &self.outputs)?;
+        dict.set_item("program", &self.program)?;
+        Ok(dict.into())
+    }
+
+}
 
 impl CalculationManager {
     /// Generate the command to run the calculation.
@@ -88,6 +105,7 @@ pub struct CopyManager {
 }
 
 /// Describes a calculation node in a graph
+#[pyclass]
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
 pub struct CalculationNode {
     pub git_hash: String,
@@ -96,7 +114,21 @@ pub struct CalculationNode {
     pub copy: CopyManager,
 }
 
+#[pymethods]
+impl CalculationNode {
 
+    pub fn to_dict(&self, py: Python) -> PyResult<PyObject> {
+
+        let dict = PyDict::new(py);
+        dict.set_item("git_hash", self.git_hash.to_string())?;
+        let calculation_dict = self.calculation.to_dict(py)?;
+        dict.set_item("calculation",calculation_dict)?;
+        Ok(dict.into())
+    }
+}
+
+
+#[pyclass]
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
 pub struct DataNode {
     pub save: bool,
@@ -130,6 +162,7 @@ impl NodeTags for CalculationNode {
 }
 
 /// The main class that defines the whole data storage structure.
+#[pyclass]
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct JsonStorage {
     pub calculation_nodes: BTreeMap<String, CalculationNode>,
@@ -149,7 +182,159 @@ struct CurrentTags {
 
 
 // implement reading and writing to the database.
+/// Functions to port to python
+#[pymethods]
+impl JsonStorage {
 
+    /// Initialize the database by connecting it to a database folder
+    #[new]
+    pub fn new(folder: String) -> Self {
+
+        let mut file = File::open(Path::new(&folder).join(".graph/graph.json")).expect("failed to open the file. file does not exist"); // Open the file
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).expect("failed to read the file (file was found)."); // Read file into a string
+        let db: JsonStorage  = serde_json::from_str(&contents).expect("Failed to convert json to internal format. Json format wrong"); // Deserialize JSON
+        db
+    }
+
+    /// Construct python dictionary.
+    fn to_dict(&self, py: Python) -> PyResult<PyObject> {
+
+        let outer_dict = PyDict::new(py);
+        let calculation_dict = PyDict::new(py);
+
+        for (k, v) in &self.calculation_nodes {
+            let calc = v.to_dict(py).expect("failed to calculate a calculation node");
+            calculation_dict.set_item(k, calc)?;
+        }
+
+        outer_dict.set_item("calculation_nodes", calculation_dict)?;
+        Ok(outer_dict.into())
+    }
+
+    /// Copies the database with new names.
+    pub fn copy(& self, reattachments: Vec<(String, String)> ) -> JsonStorage {
+
+        let mut new_data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
+        let mut new_calc_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
+        let mut rename_map: BTreeMap<String, String> = BTreeMap::new();
+
+        for attechement in &reattachments {
+            rename_map.insert(attechement.0.clone(), attechement.1.clone());
+        }
+
+        // add reattachements to the rename_map
+
+        let re = Regex::new(r"^\d+").unwrap();
+        
+        //----------------------------
+        // Create the rename map
+        //----------------------------
+        // Go through all the data nodes.
+        for (node_name, node_obj) in self.data_nodes.iter() {
+            // current time
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Failed to get current system time.")
+                .as_nanos();
+            // generate new key by changing the time stamp
+            let new_name = re.replace(node_name, now.to_string()).to_string();
+
+            rename_map.insert(node_name.clone(), new_name.clone());
+        }
+        
+        // Go through all calculation nodes
+        for (calc_name, calc_obj) in self.calculation_nodes.iter() {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Failed to get current system time.")
+                .as_nanos();
+            let new_name = re.replace(calc_name, now.to_string()).to_string();
+            rename_map.insert(calc_name.clone(), new_name.clone());
+        }
+
+        // Overwrite the manual
+        for attechement in reattachments {
+            rename_map.insert(attechement.0.clone(), attechement.1.clone());
+        }
+
+        //----------------------------
+        // Create the new database object
+        //----------------------------
+
+        // Create new Data nodes
+        for (node_name, node_obj) in self.data_nodes.iter() {
+            new_data_nodes.insert(rename_map.get(node_name).expect("failed").clone(), node_obj.clone());
+
+        }
+
+        // Create new caluclation nodes
+        for (calc_name, calc_obj) in self.calculation_nodes.iter() {
+
+            let mut new_calc_node = calc_obj.clone();
+
+            // Update inputs with new names
+            let mut updated_inputs = Vec::new();
+            for inp in &new_calc_node.calculation.inputs {
+                
+                let new_inp = match rename_map.get(inp) {
+                    Some(value) => value,
+                    None => {
+                        // Node is not in the database or extra renames. Use the same name
+                        inp
+                    }
+                };
+
+                updated_inputs.push(new_inp.clone());
+            }
+            new_calc_node.calculation.inputs = updated_inputs;
+
+            // Update outputs with new names
+            let mut updated_outputs = Vec::new();
+            for outp in &new_calc_node.calculation.outputs {
+
+                let new_outp = match rename_map.get(outp) {
+                    Some(value) => value,
+                    None => outp
+                };
+
+                updated_outputs.push(new_outp.clone());
+            }
+            new_calc_node.calculation.outputs = updated_outputs;
+
+            new_calc_nodes.insert(rename_map.get(calc_name).expect("failed").clone(), new_calc_node);
+        }
+
+
+
+
+        
+        let new_db = JsonStorage {
+            calculation_nodes: new_calc_nodes,
+            data_nodes: new_data_nodes,
+        };
+
+        new_db
+    }
+
+    /// Merge two databases
+    /// This overwrites the nodes if there are clashes. This would be used if want to add tags and then save the results
+    /// TODO: Add different modes of addition - if there is a node with the same name being added, I could either overwrite or combine the tags.
+    pub fn add(&mut self, other_db: &JsonStorage) {
+        for (calc_name, calc_node) in other_db.calculation_nodes.iter() {
+            self.calculation_nodes.insert(calc_name.clone(), calc_node.clone());
+        }
+    
+        for (data_name, data_node) in other_db.data_nodes.iter() {
+            self.data_nodes.insert(data_name.clone(), data_node.clone());
+        }
+
+    }
+
+}
+
+
+/// Expose functions
 impl JsonStorage {
 
     pub fn write_database(&self, filename: &str) -> Result<(), io::Error>{
@@ -161,20 +346,6 @@ impl JsonStorage {
         };
         file.write_all(write_string.as_bytes())?;
         Ok(())
-    }
-    
-    /// Merge two databases
-    /// This overwrites the nodes if there are clashes. This would be used if want to add tags and then save the results
-    /// TODO: Add different modes of addition - if there is a node with the same name being added, I could either overwrite or combine the tags.
-    pub fn add_database(&mut self, other_db: &JsonStorage) {
-        for (calc_name, calc_node) in other_db.calculation_nodes.iter() {
-            self.calculation_nodes.insert(calc_name.clone(), calc_node.clone());
-        }
-    
-        for (data_name, data_node) in other_db.data_nodes.iter() {
-            self.data_nodes.insert(data_name.clone(), data_node.clone());
-        }
-
     }
 
     /// Add a new calculation to the database
@@ -788,111 +959,7 @@ impl JsonStorage {
     /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
     /// reattchements - Should define all loose ends (for example inputs that are not present in the copy, but a calculation node needs it.)
     /// if an input node is not in the reattachements and not in the provided database - then a new node is created, if it's an output, then it creates a new node with no tags. If needed tags can always be added again.
-    pub fn copy_database(& self, reattachments: &Vec<[String; 2]> ) -> JsonStorage {
 
-
-
-        let mut new_data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
-        let mut new_calc_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
-        let mut rename_map: BTreeMap<String, String> = BTreeMap::new();
-
-        for attechement in reattachments {
-            rename_map.insert(attechement[0].clone(), attechement[1].clone());
-        }
-
-        // add reattachements to the rename_map
-
-        let re = Regex::new(r"^\d+").unwrap();
-        
-        //----------------------------
-        // Create the rename map
-        //----------------------------
-        // Go through all the data nodes.
-        for (node_name, node_obj) in self.data_nodes.iter() {
-            // current time
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Failed to get current system time.")
-                .as_nanos();
-            // generate new key by changing the time stamp
-            let new_name = re.replace(node_name, now.to_string()).to_string();
-
-            rename_map.insert(node_name.clone(), new_name.clone());
-        }
-        
-        // Go through all calculation nodes
-        for (calc_name, calc_obj) in self.calculation_nodes.iter() {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Failed to get current system time.")
-                .as_nanos();
-            let new_name = re.replace(calc_name, now.to_string()).to_string();
-            rename_map.insert(calc_name.clone(), new_name.clone());
-        }
-
-        // Overwrite the manual
-        for attechement in reattachments {
-            rename_map.insert(attechement[0].clone(), attechement[1].clone());
-        }
-
-        //----------------------------
-        // Create the new database object
-        //----------------------------
-
-        // Create new Data nodes
-        for (node_name, node_obj) in self.data_nodes.iter() {
-            new_data_nodes.insert(rename_map.get(node_name).expect("failed").clone(), node_obj.clone());
-
-        }
-
-        // Create new caluclation nodes
-        for (calc_name, calc_obj) in self.calculation_nodes.iter() {
-
-            let mut new_calc_node = calc_obj.clone();
-
-            // Update inputs with new names
-            let mut updated_inputs = Vec::new();
-            for inp in &new_calc_node.calculation.inputs {
-                
-                let new_inp = match rename_map.get(inp) {
-                    Some(value) => value,
-                    None => {
-                        // Node is not in the database or extra renames. Use the same name
-                        inp
-                    }
-                };
-
-                updated_inputs.push(new_inp.clone());
-            }
-            new_calc_node.calculation.inputs = updated_inputs;
-
-            // Update outputs with new names
-            let mut updated_outputs = Vec::new();
-            for outp in &new_calc_node.calculation.outputs {
-
-                let new_outp = match rename_map.get(outp) {
-                    Some(value) => value,
-                    None => outp
-                };
-
-                updated_outputs.push(new_outp.clone());
-            }
-            new_calc_node.calculation.outputs = updated_outputs;
-
-            new_calc_nodes.insert(rename_map.get(calc_name).expect("failed").clone(), new_calc_node);
-        }
-
-
-
-
-        
-        let new_db = JsonStorage {
-            calculation_nodes: new_calc_nodes,
-            data_nodes: new_data_nodes,
-        };
-
-        new_db
-    }
 
     /// Deletes nodes from the database.
     /// For the calculation nodes also delete all outputs
@@ -926,8 +993,6 @@ impl JsonStorage {
 
     }
 
-
-
 }
 
 
@@ -954,26 +1019,10 @@ pub fn format_data_entry(name: &String) -> String {
         return new_name
         }
 
-
-
 }
 
 
-pub fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
-    let mut file = File::open(filename)?; // Open the file
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?; // Read file into a string
-    let db: JsonStorage  = serde_json::from_str(&contents)?; // Deserialize JSON
-    Ok(db)
-}
 
-pub fn read_current_file(filename: &str) -> std::io::Result<CurrentTags> {
-    let mut file = File::open(filename)?; // Open the file
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?; // Read file into a string
-    let db: CurrentTags = serde_json::from_str(&contents)?; // Deserialize JSON
-    Ok(db)
-}
 
 
 /// handles whether the database comes from stdin or as the last argument named 'database'.
@@ -1030,4 +1079,12 @@ pub fn get_calculation_basename(name : &String) -> Result<String, &str> {
     }
 
 }
+
+
+#[pymodule]
+fn graphrlib(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<JsonStorage>()?;
+    Ok(())
+}
+
 

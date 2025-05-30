@@ -143,7 +143,7 @@ fn main() {
             default_struct.write_database(&JSONDATABASE.to_string());
         }
         Commands::Get  => {
-            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let db = JsonStorage::new(JSONDATABASE.to_string());
             write_database_to_stream(&db);
         }
         Commands::GetSimilar {name, database} => {
@@ -161,7 +161,7 @@ fn main() {
             write_database_to_stream(&db);
         }  
         Commands::Inspect {name, datafolder} => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let mut db = JsonStorage::new(JSONDATABASE.to_string());
             db.inspect(&name, &datafolder);
         }
         Commands::AddTag { tag, database } => {
@@ -209,36 +209,43 @@ fn main() {
         }
         Commands::Copy {attach, database} => {
 
-        let attach_parsed = match attach {
-            Some(value) => {
-                // Filter to only include complete pairs and convert each chunk to a tuple
-                value.chunks(2)
-                    .map(|chunk| [chunk.get(0).expect("failed to get second value for the chunk.").clone(), chunk.get(1).expect("failed to get second value for the chunk.").clone()])
-                    .collect::<Vec<[String;2]>>()
-            }
-            None => {
-                Vec::new()
-            }
-        };
+            let attach_parsed = match attach {
+                Some(value) => {
+                    // value is presumably a Vec<String> or slice of Strings
+                    // chunks(2) iterates over pairs of elements
+                    value.chunks(2)
+                        .filter_map(|chunk| {
+                            if chunk.len() == 2 {
+                                // Create a tuple of cloned strings
+                                Some((chunk[0].clone(), chunk[1].clone()))
+                            } else {
+                                // Ignore incomplete chunks
+                                None
+                            }
+                        })
+                        .collect::<Vec<(String, String)>>()
+                }
+                None => Vec::new(),
+            };
 
             let db = get_database_input(database);
-            let copied_db = db.copy_database(&attach_parsed);
+            let copied_db = db.copy(attach_parsed);
             write_database_to_stream(&copied_db);
 
         }
         Commands::Add {database} =>{
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let mut db = JsonStorage::new(JSONDATABASE.to_string());
             let db_std = get_database_input(database);
  
             // combine
-            db.add_database(&db_std);
+            db.add(&db_std);
             db.write_database(JSONDATABASE);
 
             write_database_to_stream(&db_std);
 
         }
         Commands::Delete { names } => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
+            let mut db = JsonStorage::new(JSONDATABASE.to_string());
             db.delete(names);
             db.write_database(JSONDATABASE);
         }
