@@ -1,4 +1,3 @@
-use clap::{Parser,Subcommand};
 use petgraph::data;
 use petgraph::visit::EdgeRef;
 use serde::{Serialize, Deserialize};
@@ -16,21 +15,18 @@ use std::path::{Path, PathBuf};
 // Create a new database stucture for storing all the json data
 
 
-const JSONDATABASE: &str  = ".graph/graph.json";
-const CURRENTTAGS: &str  = ".graph/current_tags.json";
-
 /// Manages inputs, outputs and the command to run
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
-struct CalculationManager {
-    inputs: Vec<String>,
-    outputs: Vec<String>,
-    program: String
+pub struct CalculationManager {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub program: String
 }
 
 
 impl CalculationManager {
     /// Generate the command to run the calculation.
-    fn get_full_program(& self, folder_base: &str) -> String {
+    pub fn get_full_program(& self, folder_base: &str) -> String {
 
         let relative_path = Path::new(folder_base);
         let mut final_command = self.program.clone();
@@ -51,7 +47,7 @@ impl CalculationManager {
 
     /// Generate a string that fills in most of the details for generating new things.
     /// Keep input the same; but strip the outputs
-    fn get_program_template(& self) -> String {
+    pub fn get_program_template(& self) -> String {
 
         let mut final_command = self.program.clone();
         let re = Regex::new(r"^(\d+)(.+)").expect("Failed to compile regular expression.");
@@ -86,26 +82,26 @@ impl CalculationManager {
 
 /// Manages copy history 
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
-struct CopyManager {
-    name: String, // Name of the copy node
-    origin: String // Name of the origin node
+pub struct CopyManager {
+    pub name: String, // Name of the copy node
+    pub origin: String // Name of the origin node
 }
 
 /// Describes a calculation node in a graph
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
-struct CalculationNode {
-    git_hash: String,
-    tags: Vec<String>, // For stornig things like the experiment or other thigs. 
-    calculation: CalculationManager,
-    copy: CopyManager,
+pub struct CalculationNode {
+    pub git_hash: String,
+    pub tags: Vec<String>, // For stornig things like the experiment or other thigs. 
+    pub calculation: CalculationManager,
+    pub copy: CopyManager,
 }
 
 
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
-struct DataNode {
-    save: bool,
-    tags: Vec<String>,
-    copy: CopyManager,
+pub struct DataNode {
+    pub save: bool,
+    pub tags: Vec<String>,
+    pub copy: CopyManager,
 }
 
 /// add a trait for adding tags
@@ -135,9 +131,9 @@ impl NodeTags for CalculationNode {
 
 /// The main class that defines the whole data storage structure.
 #[derive(Serialize, Deserialize, Default, Debug)]
-struct JsonStorage {
-    calculation_nodes: BTreeMap<String, CalculationNode>,
-    data_nodes: BTreeMap<String, DataNode>,
+pub struct JsonStorage {
+    pub calculation_nodes: BTreeMap<String, CalculationNode>,
+    pub data_nodes: BTreeMap<String, DataNode>,
 }
 
 /// Enum that wraps around datanodes and calculation_nodes
@@ -156,7 +152,7 @@ struct CurrentTags {
 
 impl JsonStorage {
 
-    fn write_database(&self, filename: &str) -> Result<(), io::Error>{
+    pub fn write_database(&self, filename: &str) -> Result<(), io::Error>{
         let mut file = File::create(filename)?; 
         
         let write_string = match serde_json::to_string_pretty(self){
@@ -170,7 +166,7 @@ impl JsonStorage {
     /// Merge two databases
     /// This overwrites the nodes if there are clashes. This would be used if want to add tags and then save the results
     /// TODO: Add different modes of addition - if there is a node with the same name being added, I could either overwrite or combine the tags.
-    fn add_database(&mut self, other_db: &JsonStorage) {
+    pub fn add_database(&mut self, other_db: &JsonStorage) {
         for (calc_name, calc_node) in other_db.calculation_nodes.iter() {
             self.calculation_nodes.insert(calc_name.clone(), calc_node.clone());
         }
@@ -182,7 +178,7 @@ impl JsonStorage {
     }
 
     /// Add a new calculation to the database
-    fn add_calculation(&mut self, base_name: &String, command_string: & String ) {
+    pub fn add_calculation(&mut self, base_name: &String, command_string: & String ) {
         
         // validate input
         let base_name_formated = format_data_entry(base_name);
@@ -259,7 +255,7 @@ impl JsonStorage {
     }
 
     /// Inspect a node for further information
-    fn inspect(& self, name: &String, data_folder: &String){
+    pub fn inspect(& self, name: &String, data_folder: &String){
         
         // check if it's a calculation node or a data node
         match self.get_node(name) {
@@ -288,7 +284,7 @@ impl JsonStorage {
     /// 
     /// Other options: 1) dynamic dispatch; 2) Common trait and generics (not sure if this would work, probably would have to know the result an compile time)
     /// 3) enum; 4) Or maybe I could change the strucutre, where the hash map I story enums and not classes.
-    fn get_node(&self, name: &String) -> Result<Node, String>{
+    pub fn get_node(&self, name: &String) -> Result<Node, String>{
 
         let calculation_branch = self.calculation_nodes.contains_key(name);
         let data_branch = self.data_nodes.contains_key(name);
@@ -312,7 +308,7 @@ impl JsonStorage {
     }
 
     /// Get nodes that contain the given substring
-    fn get_similar_nodes(&self, name: &String) -> Vec<String>{
+    pub fn get_similar_nodes(&self, name: &String) -> Vec<String>{
 
         let mut name_list: Vec<String> = Vec::new();
 
@@ -333,7 +329,7 @@ impl JsonStorage {
     }
 
     /// Add tags to given nodes
-    fn add_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
+    pub fn add_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
 
         let node_names: Vec<String> = self.calculation_nodes.keys().cloned().collect();
 
@@ -364,7 +360,7 @@ impl JsonStorage {
     }
 
     /// Set tags for the database. Overwrites the old ones
-    fn set_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
+    pub fn set_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
         let node_names: Vec<String> = self.calculation_nodes.keys().cloned().collect();
 
         for node_name in node_names {
@@ -386,7 +382,7 @@ impl JsonStorage {
 
 
     /// Remove tags from the database
-    fn remove_tags(&mut self, tag_list: &Vec<String>)-> Result<(), String> {
+    pub fn remove_tags(&mut self, tag_list: &Vec<String>)-> Result<(), String> {
 
 
         let node_names: Vec<String> = self.calculation_nodes.keys().cloned().collect();
@@ -422,7 +418,7 @@ impl JsonStorage {
     }
 
     /// Returns a filtered with nodes that only have a certain tag.
-    fn filter_by_tags(& self, tags_to_include: &Vec<String>, tags_to_exclude : &Vec<String>) -> JsonStorage{
+    pub fn filter_by_tags(& self, tags_to_include: &Vec<String>, tags_to_exclude : &Vec<String>) -> JsonStorage{
 
         // create an emtyp object
         let mut filtered_database = JsonStorage::default();
@@ -482,7 +478,7 @@ impl JsonStorage {
     }
 
     /// Covert database to a DiGraph (could be a filtered database) to a graph representation for selection of the graph in other ways and plotting too.
-    fn generate_digraph(& self) -> (DiGraph::<&str, &str>, BTreeMap<String, NodeIndex>){
+    pub fn generate_digraph(& self) -> (DiGraph::<&str, &str>, BTreeMap<String, NodeIndex>){
         
         let mut graph = DiGraph::<&str, &str>::new(); // initialize the final graph
         let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
@@ -525,7 +521,7 @@ impl JsonStorage {
     }
 
     /// Similar to the previous one, but generates undirected graph.
-    fn generate_ungraph(& self) -> (UnGraph::<&str, ()>, BTreeMap<String, NodeIndex>){
+    pub fn generate_ungraph(& self) -> (UnGraph::<&str, ()>, BTreeMap<String, NodeIndex>){
         
         let mut graph = UnGraph::<&str, ()>::new_undirected(); // initialize the final graph
         let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
@@ -568,7 +564,7 @@ impl JsonStorage {
     }
 
     /// Given a name of the node, finds all connected nodes and returns a new, smaller graph
-    fn select_disconected_branch(&self, name: &String) -> DiGraph<String, ()> {
+    pub fn select_disconected_branch(&self, name: &String) -> DiGraph<String, ()> {
         let mut new_graph: DiGraph<String, ()> = DiGraph::new();
         let (current_graph, current_node_name_map) = self.generate_ungraph();
         let origin_node = current_node_name_map.get(name).expect("Failed to find node in the database!").clone();
@@ -616,7 +612,7 @@ impl JsonStorage {
     }
 
     /// Select all nodes that produce a certain file. Select the whole history and return a new graph
-    fn select_node_history(&self, name: &String) -> DiGraph<String, ()> {
+    pub fn select_node_history(&self, name: &String) -> DiGraph<String, ()> {
 
         let mut new_graph: DiGraph<String, ()> = DiGraph::new();
         let (current_graph, current_node_name_map) = self.generate_digraph();
@@ -678,7 +674,7 @@ impl JsonStorage {
     }
 
     /// Copies all outgoing nodes for a given database and attaches the same nodes (copied) to the destination
-    fn select_node_future(& self, name : &String) -> DiGraph<String, ()> {
+    pub fn select_node_future(& self, name : &String) -> DiGraph<String, ()> {
 
         let mut new_graph: DiGraph<String, ()> = DiGraph::new();
         let  (mut current_graph, current_node_name_map) = self.generate_digraph();
@@ -743,7 +739,7 @@ impl JsonStorage {
         new_graph
     }
     /// Convert Graph to database object within the current database context.
-    fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
+    pub fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> JsonStorage {
 
         let mut calculation_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
         let mut data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
@@ -766,7 +762,7 @@ impl JsonStorage {
     }
 
     /// Select nodes by the given name
-    fn select_by_name(&self, name_list: &Vec<String>) -> JsonStorage{
+    pub fn select_by_name(&self, name_list: &Vec<String>) -> JsonStorage{
 
         let mut calculation_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
         let mut data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
@@ -792,7 +788,7 @@ impl JsonStorage {
     /// It keeps all the old tags and configurations of the old nodes. The structure should be passed to other commands to change those.
     /// reattchements - Should define all loose ends (for example inputs that are not present in the copy, but a calculation node needs it.)
     /// if an input node is not in the reattachements and not in the provided database - then a new node is created, if it's an output, then it creates a new node with no tags. If needed tags can always be added again.
-    fn copy_database(& self, reattachments: &Vec<[String; 2]> ) -> JsonStorage {
+    pub fn copy_database(& self, reattachments: &Vec<[String; 2]> ) -> JsonStorage {
 
 
 
@@ -900,7 +896,7 @@ impl JsonStorage {
 
     /// Deletes nodes from the database.
     /// For the calculation nodes also delete all outputs
-    fn delete(&mut self, node_names: &Vec<String>) {
+    pub fn delete(&mut self, node_names: &Vec<String>) {
         
         let mut remove_calculation_nodes : Vec<&String> = Vec::new(); 
 
@@ -936,7 +932,7 @@ impl JsonStorage {
 
 
 /// Formats a string to a format compatable for the database
-fn format_data_entry(name: &String) -> String {
+pub fn format_data_entry(name: &String) -> String {
 
     // Add the current time to the input if it does not exist.
     let re = Regex::new(r"^\d{16}").unwrap();
@@ -963,10 +959,7 @@ fn format_data_entry(name: &String) -> String {
 }
 
 
-
-
-
-fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
+pub fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
     let mut file = File::open(filename)?; // Open the file
     let mut contents = String::new();
     file.read_to_string(&mut contents)?; // Read file into a string
@@ -974,7 +967,7 @@ fn read_json_file(filename: &str) -> std::io::Result<JsonStorage> {
     Ok(db)
 }
 
-fn read_current_file(filename: &str) -> std::io::Result<CurrentTags> {
+pub fn read_current_file(filename: &str) -> std::io::Result<CurrentTags> {
     let mut file = File::open(filename)?; // Open the file
     let mut contents = String::new();
     file.read_to_string(&mut contents)?; // Read file into a string
@@ -984,7 +977,7 @@ fn read_current_file(filename: &str) -> std::io::Result<CurrentTags> {
 
 
 /// handles whether the database comes from stdin or as the last argument named 'database'.
-fn get_database_input(database: &Option<String>) -> JsonStorage{
+pub fn get_database_input(database: &Option<String>) -> JsonStorage{
 
     let database_json_string = match database {
         Some(data) => {data.clone()}
@@ -998,7 +991,7 @@ fn get_database_input(database: &Option<String>) -> JsonStorage{
     return db
 }
 
-fn write_database_to_stream(database: &JsonStorage){
+pub fn write_database_to_stream(database: &JsonStorage){
 
     let write_string = serde_json::to_string(database).expect("Failed to seriazile the database for printing.");
 
@@ -1020,7 +1013,7 @@ fn write_database_to_stream(database: &JsonStorage){
 }
 
 /// Given a calculation name extarcts the basename (removes initial digits)
-fn get_calculation_basename(name : &String) -> Result<String, &str> {
+pub fn get_calculation_basename(name : &String) -> Result<String, &str> {
 
     let re = Regex::new(r"^(\d+)(.+)").expect("Failed to compile regular expression.");
 
@@ -1038,255 +1031,3 @@ fn get_calculation_basename(name : &String) -> Result<String, &str> {
 
 }
 
-
-/// Command line interface
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    /// Name of the person to greet
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Initialize the databse
-    Init,
-
-    /// Get the database and inject that into the stdout.
-    Get,
-
-    /// Get Nodes that have a given substring
-    GetSimilar {
-        name:String,
-        database: Option<String>
-    },
-
-    /// Add a calculation to the database.
-    NewCalculation {
-        name: String,
-        command : String,
-        },
-    /// Inspect a node
-    Inspect {name: String, 
-        #[clap(default_value = "data")] 
-        datafolder: String
-        },
-    /// add tags to given nodes
-    AddTag {
-
-        #[clap(long = "tag", required = true)]
-        tag: Vec<String>,
-        /// Database in the string format
-        database: Option<String>
-    },
-    /// Set all the tags for the given (sub)database.
-    SetTags {
-
-        #[clap(long = "tag", required = true)]
-        tags: Vec<String>,
-        /// Database in the string format
-        database: Option<String>
-    },
-    /// Remove tags to given nodes
-    RemoveTag {
-
-        #[clap(long = "tag", required = true)]
-        tag: Vec<String>,
-        /// Database in the string format
-        database: Option<String>
-    },
-    /// Select nodes by tag
-    SelectTag {
-        /// Tags to include
-        #[clap(long = "tag", default_values_t = Vec::<String>::new())]
-        tags:Vec<String>,
-        /// Tags to exclude
-        #[clap(long = "notag",default_values_t = Vec::<String>::new())]
-        notags:Vec<String>,
-
-        /// Database in the string format
-        database: Option<String>
-    },
-    SelectSubbranch { name: String, database: Option<String>},
-
-    /// Select all nodes that come to produce a certain node.
-    SelectHistory {name:String, database:Option<String>},
-
-    /// Select a part of the database by name
-    SelectName {        
-        #[clap(long = "name", required = true)]
-        names:Vec<String>,
-
-        /// Database in the string format
-        database: Option<String>},
-
-    /// Visualize the graph
-    Show {
-        database: Option<String>
-    },
-    /// Rename nodes
-    Copy {
-        #[arg(
-            long = "attach", 
-            num_args = 2,  // Requires exactly 2 values per occurrence
-            help = "Specify a pair of names to attach (requires exactly 2 names)",
-        )]
-        attach: Option<Vec<String>>,
-
-        database: Option<String>
-    },
-
-    /// Adds given stream from the command line to the actual database.
-    Add {
-        /// Database passed from the coomand line
-        database: Option<String>
-    },
-    /// delete named nodes from the database
-    Delete {
-        #[clap(long = "name", required = true)]
-        names:Vec<String>,
-    },
-
-    /// Find all outgoing nodes from one node and create a copy on some other node
-    /// Used to quickly create calculations for new modifications
-    SelectFuture {
-        name:String,
-        /// Database in the string format
-        database: Option<String>
-    }
-
-}
-
-fn main() {
-    let cli = Cli::parse();
-
-    match &cli.command {
-        Commands::Init  => {
-            let calculation_manager = CalculationManager{inputs:vec!["input_1".to_string()],
-                    outputs: vec!["output_2".to_string()],
-                    program: "python3 input_1 output_2".to_string()};
-
-            let copy_manager = CopyManager {name: "test".to_string(), origin: "another_test".to_string()};
-            
-            let mut calculation_nodes = BTreeMap::new();
-            calculation_nodes.insert("test".to_string(), CalculationNode{git_hash: "".to_string(), tags: Vec::new(), calculation: calculation_manager, copy: copy_manager});
-            let mut data_nodes = BTreeMap::new();
-            data_nodes.insert("test_data".to_string(), DataNode{save:true, tags:Vec::new(), copy: CopyManager::default()});                                                
-            let mut default_struct = JsonStorage{calculation_nodes: calculation_nodes, data_nodes: data_nodes};
-            default_struct.write_database(&JSONDATABASE.to_string());
-        }
-        Commands::Get  => {
-            let db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            write_database_to_stream(&db);
-        }
-        Commands::GetSimilar {name, database} => {
-            let db = get_database_input(database);
-            let name_list = db.get_similar_nodes(&name);
-
-            for name in name_list {
-                println!("{}",name);
-            }
-
-        }
-        Commands::NewCalculation {name, command} => {
-            let mut db =  JsonStorage::default();
-            db.add_calculation(&name, &command);
-            write_database_to_stream(&db);
-        }  
-        Commands::Inspect {name, datafolder} => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            db.inspect(&name, &datafolder);
-        }
-        Commands::AddTag { tag, database } => {
-            let mut db = get_database_input(database);
-            db.add_tags( &tag).expect("Faile to add tags");
-            write_database_to_stream(&db);
-        }
-        Commands::SetTags { tags, database } => {
-            let mut db = get_database_input(database);
-            db.set_tags( &tags).expect("Failed to set tags");
-            write_database_to_stream(&db);
-
-        }
-        Commands::RemoveTag {tag, database } => {
-            let mut db = get_database_input(database);
-            db.remove_tags(&tag).expect("Faile to add tags");
-            write_database_to_stream(&db);
-        }
-        Commands::SelectTag { tags, notags, database } => {
-            
-            let db = get_database_input(database);
-            let new_db = db.filter_by_tags(tags, notags);
-            write_database_to_stream(&new_db);
-        }
-        Commands::SelectSubbranch { name , database} => {
-            let db = get_database_input(database);
-            let graph = db.select_disconected_branch(name);
-            let new_db = db.digraph_to_database(&graph);
-            write_database_to_stream(&new_db);
-        }
-        Commands::SelectHistory { name, database } => {
-            let db = get_database_input(database);
-            let graph = db.select_node_history(name);
-            let new_db = db.digraph_to_database(&graph);
-            write_database_to_stream(&new_db);
-
-        }
-        Commands::Show { database } => {
-            
-            // handle the cases when the input is passed directly and when it could by piped.
-            let db = get_database_input(database);
-            let (graph, _graph_nodes) = db.generate_digraph();
-            println!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]));
-
-        }
-        Commands::Copy {attach, database} => {
-
-        let attach_parsed = match attach {
-            Some(value) => {
-                // Filter to only include complete pairs and convert each chunk to a tuple
-                value.chunks(2)
-                    .map(|chunk| [chunk.get(0).expect("failed to get second value for the chunk.").clone(), chunk.get(1).expect("failed to get second value for the chunk.").clone()])
-                    .collect::<Vec<[String;2]>>()
-            }
-            None => {
-                Vec::new()
-            }
-        };
-
-            let db = get_database_input(database);
-            let copied_db = db.copy_database(&attach_parsed);
-            write_database_to_stream(&copied_db);
-
-        }
-        Commands::Add {database} =>{
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            let db_std = get_database_input(database);
- 
-            // combine
-            db.add_database(&db_std);
-            db.write_database(JSONDATABASE);
-
-            write_database_to_stream(&db_std);
-
-        }
-        Commands::Delete { names } => {
-            let mut db = read_json_file(JSONDATABASE).expect("Failed to read the database");
-            db.delete(names);
-            db.write_database(JSONDATABASE);
-        }
-        Commands::SelectName { names, database } => {
-            let db = get_database_input(database);
-            let copied_db = db.select_by_name(names);
-            write_database_to_stream(&copied_db);
-        }
-        Commands::SelectFuture { name, database } => {
-
-            let db = get_database_input(database);
-            let graph = db.select_node_future(name);
-            let new_db = db.digraph_to_database(&graph);
-            write_database_to_stream(&new_db);
-        }
-    }
-}
