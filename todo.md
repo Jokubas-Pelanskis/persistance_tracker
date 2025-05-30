@@ -1,1 +1,2 @@
 - Implement a feature where a a calculation could only modify a single file or folder. This probably needs a different label (on top of 'input' and 'output'). Could be something like 'modify'. This will create circular loops, therefore when I trace proverance, this needs to be handeled separately not to run into infinite loops.
+    (At the moment the only way of doing this is by creating explicit inputs and outputs and the flow has to be preserved, there is no way of modifying a file in place. This feature could be powerful.)
