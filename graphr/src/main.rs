@@ -239,7 +239,7 @@ fn main() {
  
             // combine
             db.add(&db_std);
-            db.write(JSONDATABASE);
+            db.write("");
 
             write_database_to_stream(&db_std);
 
@@ -247,7 +247,7 @@ fn main() {
         Commands::Delete { names } => {
             let mut db = JsonStorage::new("".to_string());
             db.delete(names);
-            db.write(JSONDATABASE);
+            db.write("");
         }
         Commands::SelectName { names, database } => {
             let db = get_database_input(database);
