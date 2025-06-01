@@ -346,6 +346,51 @@ impl JsonStorage {
         Ok(())
     }
 
+    /// Given a name selects all connected nodes
+    pub fn select_future(&self, name: &str) -> JsonStorage {
+        let subgraph = self.select_node_future(&name.to_string());
+        let graph = self.digraph_to_database(&subgraph);
+        graph
+    }
+
+
+    /// Get nodes that contain the given substring
+    pub fn get_similar(&self, name: &str) -> Vec<String>{
+
+        let mut name_list: Vec<String> = Vec::new();
+
+        for calc_name in self.calculation_nodes.keys() {
+            if calc_name.contains(name) {
+                name_list.push(calc_name.clone());
+            }
+        }
+
+        for node_name in self.data_nodes.keys() {
+            if node_name.contains(name) {
+                name_list.push(node_name.clone());
+            }
+        }
+
+        name_list
+
+    }
+
+    /// Get exe command
+    pub fn command(&self, name: &str) -> String {
+
+        let node = self.get_node(&name.to_string()).expect("Failed to get the node from the database.");
+
+        let command = match node {
+            Node::Calculation(calculation_node) => {
+                calculation_node.calculation.get_full_program("data/")
+            }
+            Node::Data(data_node) =>  {
+                panic!("Data Node selected. Data Nodes have no command assosiated. Please provide calculation node name.")
+            }
+        };
+
+        command
+    }
 }
 
 
@@ -483,26 +528,7 @@ impl JsonStorage {
 
     }
 
-    /// Get nodes that contain the given substring
-    pub fn get_similar_nodes(&self, name: &String) -> Vec<String>{
 
-        let mut name_list: Vec<String> = Vec::new();
-
-        for calc_name in self.calculation_nodes.keys() {
-            if calc_name.contains(name) {
-                name_list.push(calc_name.clone());
-            }
-        }
-
-        for node_name in self.data_nodes.keys() {
-            if node_name.contains(name) {
-                name_list.push(node_name.clone());
-            }
-        }
-
-        name_list
-
-    }
 
     /// Add tags to given nodes
     pub fn add_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
@@ -739,6 +765,7 @@ impl JsonStorage {
 
     }
 
+    /// ADD THE FOLLOWING TO PYHON
     /// Given a name of the node, finds all connected nodes and returns a new, smaller graph
     pub fn select_disconected_branch(&self, name: &String) -> DiGraph<String, ()> {
         let mut new_graph: DiGraph<String, ()> = DiGraph::new();

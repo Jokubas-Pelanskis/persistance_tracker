@@ -33,6 +33,142 @@
         "name": "",
         "origin": ""
       }
+    },
+    "1748720258543045714first_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258542037957file1.yaml"
+        ],
+        "outputs": [
+          "1748720258543025168file2.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258543053294second_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258543025168file2.yaml"
+        ],
+        "outputs": [
+          "1748720258543037336file3.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258545523722first_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258545295977file1.yaml"
+        ],
+        "outputs": [
+          "1748720258545504977file2.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258545530677second_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258545504977file2.yaml"
+        ],
+        "outputs": [
+          "1748720258545515656file3.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258547246120first_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258547051616file1.yaml"
+        ],
+        "outputs": [
+          "1748720258547230444file2.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258547252894second_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258547230444file2.yaml"
+        ],
+        "outputs": [
+          "1748720258547239167file3.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258548927062first_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258548733242file1.yaml"
+        ],
+        "outputs": [
+          "1748720258548911530file2.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258548933737second_double": {
+      "git_hash": "",
+      "tags": [],
+      "calculation": {
+        "inputs": [
+          "1748720258548911530file2.yaml"
+        ],
+        "outputs": [
+          "1748720258548920011file3.yaml"
+        ],
+        "program": "python3 scripts.py double --input $input_0 --output $output_0"
+      },
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
     }
   },
   "data_nodes": {
@@ -53,6 +189,102 @@
       }
     },
     "1748710886382139350file3.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258542037957file1.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258543025168file2.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258543037336file3.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258545295977file1.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258545504977file2.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258545515656file3.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258547051616file1.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258547230444file2.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258547239167file3.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258548733242file1.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258548911530file2.yaml": {
+      "save": false,
+      "tags": [],
+      "copy": {
+        "name": "",
+        "origin": ""
+      }
+    },
+    "1748720258548920011file3.yaml": {
       "save": false,
       "tags": [],
       "copy": {
