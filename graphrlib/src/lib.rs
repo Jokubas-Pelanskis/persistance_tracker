@@ -353,25 +353,110 @@ impl JsonStorage {
         graph
     }
 
+    /// Given a name selects all connected nodes
+    pub fn select_history(&self, name: &str) -> JsonStorage {
+        let subgraph = self.select_node_history(&name.to_string());
+        let graph = self.digraph_to_database(&subgraph);
+        graph
+    }
+
+    /// Returns inputs and outputs corresponding to a single simulations
+    /// Use to propogate a single calculation across multiple input files.
+    pub fn select_calculation(&self, name: &str) -> JsonStorage {
+
+
+        let mut calculation_nodes: BTreeMap<String, CalculationNode> = BTreeMap::new();
+        let mut data_nodes: BTreeMap<String, DataNode> = BTreeMap::new();
+        
+        let cnode = self.calculation_nodes.get(name).expect("Calculation node with this name does not exist.");
+
+        // Insert the calculation node
+        calculation_nodes.insert(name.to_string(), cnode.clone());
+        
+        for dnode_name in &cnode.calculation.inputs {
+            let dnode = self.data_nodes.get(dnode_name).expect("failed to find input for the calculation");
+            data_nodes.insert(dnode_name.clone(), dnode.clone());
+        }
+
+        for dnode_name in &cnode.calculation.outputs {
+            let dnode = self.data_nodes.get(dnode_name).expect("failed to find output for the calculation");
+            data_nodes.insert(dnode_name.clone(), dnode.clone());
+        }
+
+
+
+        JsonStorage {calculation_nodes : calculation_nodes, data_nodes : data_nodes}
+        
+
+    }
+
+
+
+
+    // pub fn select_branch(&self, start : Vec<String>, end: Vec<String>) -> JsonStorage {
+
+    // }
+
+    // /// Gets a subbranch between start nodes and end nodes
+    // /// Only Data Nodes should be provided
+    // /// NOTE on API choice. If calculation nodes could be provided, then it's unclear how to handle inputs to the start nodes.
+    // /// Default could be that everything is copied (but then you would have to remember to reattach the expensive ones)
+    // /// If the default is don't copy, then I would just redo the same thing
+    // /// But if I provide only data nodes. The behaviour could be such that
+    // /// I figure out connecting path between start data nodes and end data nodes and see what calculations need to be repeated.
+    // /// If there are any unmentioned data nodes:
+    // /// - If it's an input - then it will be kept (to prevent requirnd recalculation)
+    // /// - If it's an output - then copy, because a new calculation will be generated. 
+    // /// NOTE: it's better to restrict to only what type of node, otherwise that freedom would add confusion to what nodes should be provided.
+    // /// And then once the subbranch is coppied, then I might want to have specific names for some of the nodes, that's where the attach comes in that allows
+    // /// giving specific names.
+    // pub fn copy_branch(&self, start : Vec<String>, end: Vec<String>) -> JsonStorage{
+
+    //     // Select the branch I am interested in
+    //     let mut selected_branch = self.select_branch(start= start, end = end);
+
+    //     // Copy all nodes over by the above rules.
+
+    // }
+
+
 
     /// Get nodes that contain the given substring
-    pub fn get_similar(&self, name: &str) -> Vec<String>{
+    pub fn get_similar(&self, reg_str: &str) -> Vec<String>{
 
         let mut name_list: Vec<String> = Vec::new();
+        let re = Regex::new(reg_str).expect("Failed to compile the regular expression.");
+        
+        let mut pass_calc: Vec<String> = self.calculation_nodes
+            .keys()
+            .filter(|s| re.is_match(s))
+            .cloned()
+            .collect();
 
-        for calc_name in self.calculation_nodes.keys() {
-            if calc_name.contains(name) {
-                name_list.push(calc_name.clone());
-            }
-        }
 
-        for node_name in self.data_nodes.keys() {
-            if node_name.contains(name) {
-                name_list.push(node_name.clone());
-            }
-        }
+        let mut pass_data: Vec<String> = self.data_nodes
+            .keys()
+            .filter(|s| re.is_match(s))
+            .cloned()
+            .collect();
 
-        name_list
+        pass_calc.extend(pass_data);
+
+        pass_calc
+
+        // for calc_name in self.calculation_nodes.keys() {
+        //     if calc_name.ends_with(name) {
+        //         name_list.push(calc_name.clone());
+        //     }
+        // }
+
+        // for node_name in self.data_nodes.keys() {
+        //     if node_name.ends_with(name) {
+        //         name_list.push(node_name.clone());
+        //     }
+        // }
+
+        // name_list
 
     }
 
@@ -527,8 +612,6 @@ impl JsonStorage {
         }
 
     }
-
-
 
     /// Add tags to given nodes
     pub fn add_tags(&mut self, tag_list: &Vec<String>) -> Result<(), String> {
