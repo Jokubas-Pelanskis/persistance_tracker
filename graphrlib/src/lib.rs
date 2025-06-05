@@ -19,8 +19,8 @@ use petgraph::algo::has_path_connecting;
 /// Set types for interacting with the database
 type IdCTemplate = String;
 type IdDTemplate = String;
-type IdC = u128;
-type IdD = u128;
+type IdC = String;
+type IdD = String;
 type IdTemplate = String;
 
 
@@ -60,6 +60,15 @@ pub struct DatabaseTemplate {
     dnodes: BTreeMap<IdDTemplate, DNodeTemplate>, // Store all data nodes
 }
 
+/// Describes implementations and actual calculations
+#[pyclass]
+pub struct Database {
+
+    template: DatabaseTemplate, // Store the template
+    cnodes: BTreeMap<IdC, CNode>, // Store all calculation nodes
+    dnodes: BTreeMap<IdD, DNode>, // Store all data nodes
+
+}
 
 
 /// describe imlementations of nodes (These will have names with time stamps)
@@ -95,15 +104,14 @@ impl Node {
     /// Generate an id for a calculation node.
     #[staticmethod]
     fn generate_id() -> IdC{
-
         let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Failed to get current system time.")
         .as_nanos()
-        .try_into().expect("value out of range");
-
+        .to_string();
         now
     }
+
 }
 
 
@@ -178,6 +186,24 @@ impl CNodeTemplate {
 }
 
 
+impl CNode {
+    pub fn create_label(&self) -> String{
+        let uuid = self.id.clone();
+        let base_name = self.template.clone();
+        format!("{}{}",uuid, base_name)
+    }
+}
+
+impl DNode {
+    pub fn create_label(&self) -> String{
+        let uuid = self.id.clone();
+        let base_name = self.template.clone();
+        format!("{}{}",uuid, base_name)
+    }
+}
+
+
+
 #[pymethods]
 impl DatabaseTemplate {
 
@@ -197,6 +223,7 @@ impl DatabaseTemplate {
         let dnodes = format!("{:?}", self.dnodes);
         Ok(format!("DatabaseTemplate(cnodes={};\ndnodes={})",cnodes, dnodes  ))
     }
+
 
 
 
@@ -229,15 +256,11 @@ impl DatabaseTemplate {
 
     }
 
+    /// Return the database in DOT format
     pub fn as_dot(&self) -> String {
         let graph = self.generate_digraph();
         format!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]))
     }
-
-
-
-
-
 
 
     /// get a node from a template
@@ -260,14 +283,15 @@ impl DatabaseTemplate {
         for (key, value) in &self.dnodes {
             // Create the node
             let cid = Node::generate_id();
+
             let dnode = DNode {
-                id: cid,
+                id: cid.clone(),
                 template: value.id.clone(),
             };
             // insert into the final
-            new_dnodes.insert(cid, dnode);
+            new_dnodes.insert(cid.clone(), dnode);
             // insert into the remaping
-            dnode_mapping.insert(key, cid);
+            dnode_mapping.insert(key, cid.clone());
 
         }
 
@@ -282,14 +306,14 @@ impl DatabaseTemplate {
             };
         
             let cnode = CNode {
-                id: cid,
+                id: cid.clone(),
                 template: value.id.clone(),
                 command: value.command.clone(),
                 incoming: value.incoming.iter().map(map_with_error).collect(),
                 outcoming: value.outcoming.iter().map(map_with_error).collect(),
             };
         
-            new_cnodes.insert(cid, cnode);
+            new_cnodes.insert(cid.clone(), cnode);
         }
 
 
@@ -309,21 +333,20 @@ impl DatabaseTemplate {
 
 impl DatabaseTemplate {
 
-    /// Generate a graph object 
-    fn generate_digraph(& self) -> DiGraph::<&str, &str>{
+    fn generate_digraph(&self) -> DiGraph::<String, String>{
         
-        let mut graph = DiGraph::<&str, &str>::new(); // initialize the final graph
+        let mut graph = DiGraph::<String, String>::new(); // initialize the final graph
         // Define all graph node object and place them into a BTreeMap. Used for constructing the graph
         let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
         let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
         // Create nodes for the graph
         for id in self.cnodes.keys() {
-            let gn = graph.add_node(id);
+            let gn = graph.add_node(id.clone());
             graph_nodes.insert(id.clone(), gn);
         }
         for id in self.dnodes.keys() {
-            let gn = graph.add_node(id);
+            let gn = graph.add_node(id.clone());
             graph_nodes.insert(id.clone(), gn);
         }
 
@@ -359,16 +382,6 @@ impl DatabaseTemplate {
 }
 
 
-/// Describes implementations and actual calculations
-#[pyclass]
-pub struct Database {
-
-    template: DatabaseTemplate, // Store the template
-    cnodes: BTreeMap<IdC, CNode>, // Store all calculation nodes
-    dnodes: BTreeMap<IdD, DNode>, // Store all data nodes
-
-}
-
 /// Implement all selection and filtering functions
 #[pymethods]
 impl Database {
@@ -380,6 +393,10 @@ impl Database {
         Ok(format!("DatabaseTemplate(cnodes={};\ndnodes={})",cnodes, dnodes  ))
     }
 
+    pub fn as_dot(&self) -> String {
+        let graph = self.generate_digraph();
+        format!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]))
+    }
 
     /// Select all nodes based on name
     pub fn select(&self, name: Node) -> Database {
@@ -407,6 +424,58 @@ impl Database {
 
     fn write(&self) -> Database {
         unimplemented!();
+    }
+
+}
+
+impl Database{
+
+
+    fn generate_digraph(&self) -> DiGraph::<String, String>{
+        
+        let mut graph = DiGraph::<String, String>::new(); // initialize the final graph
+        // Define all graph node object and place them into a BTreeMap. Used for constructing the graph
+        let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
+        let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
+
+        // Create nodes for the graph
+        for (id, node) in self.cnodes.iter() {
+            let gn = graph.add_node(node.create_label());
+            graph_nodes.insert(id.clone(), gn);
+        }
+        for (id, node) in self.dnodes.iter() {
+            let gn = graph.add_node(node.create_label());
+            graph_nodes.insert(id.clone(), gn);
+        }
+
+
+        // Add edges to the graph
+        // Go through all nodes
+        for (id, node) in self.cnodes.iter() {
+            // Go through all inputs in a node
+            for i_id in &node.incoming {
+                let starting_node =  match graph_nodes.get(i_id) {
+                    Some(value) => value,
+                    None => panic!("{}",format!{"Node {} has not been found in the diGraph object.", i_id})
+                };
+                let end_node = graph_nodes.get(id).expect(&format!("input {} found for {} calculation", &i_id, &id));
+                edges.push((*starting_node, *end_node));
+            }
+
+            for i_id in &node.outcoming {
+                let starting_node = graph_nodes.get(id).expect(&format!("input {} found for {} calculation", &i_id, &id));
+                let end_node =  match graph_nodes.get(i_id) {
+                    Some(value) => value,
+                    None => panic!("{}",format!{"Node {} has not been found in the diGraph object.", i_id})
+                };
+                edges.push((*starting_node, *end_node));
+
+            }
+        }
+
+        graph.extend_with_edges(&edges);
+        return graph
+
     }
 
 }
