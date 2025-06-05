@@ -76,7 +76,8 @@ pub struct Database {
 #[derive(Serialize, Deserialize, Default,Clone, Debug)]
 pub struct DNode {
     pub id: IdD,
-    pub template: IdDTemplate
+    pub template: IdDTemplate,
+    pub true_name: Option<String> // If the name is given then this is used, if not, then name is created from a combination of id and template
 }
 
 /// Describes an abstract calculation node
@@ -186,15 +187,22 @@ impl CNodeTemplate {
 }
 
 
-impl CNode {
+impl DNode {
     pub fn create_label(&self) -> String{
-        let uuid = self.id.clone();
-        let base_name = self.template.clone();
-        format!("{}{}",uuid, base_name)
+
+        match &self.true_name {
+            Some(value) => value.clone(),
+            None => {
+                let uuid = self.id.clone();
+                let base_name = self.template.clone();
+                format!("{}{}",uuid, base_name)
+            }
+        }
+
     }
 }
 
-impl DNode {
+impl CNode {
     pub fn create_label(&self) -> String{
         let uuid = self.id.clone();
         let base_name = self.template.clone();
@@ -269,7 +277,7 @@ impl DatabaseTemplate {
     }
 
     /// Create an implementation of a given template.
-    pub fn create_calculation(&self, leafs: Vec<(String,String)>) -> Database {
+    pub fn create_calculation(&self, leafs: BTreeMap<String, String>) -> Database {
         
         // Need to go through all data and calculation nodes and generate actual calculations.
 
@@ -287,6 +295,7 @@ impl DatabaseTemplate {
             let dnode = DNode {
                 id: cid.clone(),
                 template: value.id.clone(),
+                true_name: leafs.get(&value.id).cloned()
             };
             // insert into the final
             new_dnodes.insert(cid.clone(), dnode);
