@@ -5,14 +5,19 @@ DNode - Only contains abstract calculations. real data are only described by loc
 */
 use std::collections::BTreeMap;
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::fmt;
+use std::collections::HashSet;
 
 use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
+use petgraph::Direction;
 use petgraph::dot::{Dot, Config};
 use petgraph::algo::has_path_connecting;
+use petgraph::visit::Topo;
+use petgraph::visit::Walker;
 
 
 
@@ -62,6 +67,7 @@ pub struct DatabaseTemplate {
 
 /// Describes implementations and actual calculations
 #[pyclass]
+#[derive(Clone)]
 pub struct Database {
 
     template: DatabaseTemplate, // Store the template
@@ -113,6 +119,14 @@ impl Node {
         now
     }
 
+    fn get_label(&self) -> String {
+        match self {
+            Node::Calculation(a) => a.get_label(),
+            Node::Data(a) => a.get_label()
+        }
+    }
+
+
 }
 
 
@@ -141,7 +155,6 @@ impl CNodeTemplate {
     }
 
 }
-
 
 
 
@@ -188,7 +201,7 @@ impl CNodeTemplate {
 
 
 impl DNode {
-    pub fn create_label(&self) -> String{
+    pub fn get_label(&self) -> String{
 
         match &self.true_name {
             Some(value) => value.clone(),
@@ -203,7 +216,7 @@ impl DNode {
 }
 
 impl CNode {
-    pub fn create_label(&self) -> String{
+    pub fn get_label(&self) -> String{
         let uuid = self.id.clone();
         let base_name = self.template.clone();
         format!("{}{}",uuid, base_name)
@@ -295,7 +308,7 @@ impl DatabaseTemplate {
             let dnode = DNode {
                 id: cid.clone(),
                 template: value.id.clone(),
-                true_name: leafs.get(&value.id).cloned()
+                true_name: leafs.get(&value.id).cloned() 
             };
             // insert into the final
             new_dnodes.insert(cid.clone(), dnode);
@@ -403,14 +416,112 @@ impl Database {
     }
 
     pub fn as_dot(&self) -> String {
-        let graph = self.generate_digraph();
+        let (graph, retrieval) = self.generate_digraph();
         format!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]))
+    }
+
+    /// Get a DataNode and CalculationNode from a database
+    pub fn get(&self, id: String) -> Option<Node>{
+
+        let calculation_branch = self.cnodes.contains_key(&id);
+        let data_branch = self.dnodes.contains_key(&id);
+
+        if !calculation_branch && !data_branch {
+            return None
+        }
+
+        if calculation_branch {
+            let node = self.cnodes.get(&id).expect("Failed to find a calculation node.");
+            let return_node = Node::Calculation(node.clone());
+            return Some(return_node)
+
+        }
+        else {
+            let node = self.dnodes.get(&id).expect("Failed to find the data node");
+            let return_node = Node::Data(node.clone());
+            return Some(return_node)
+        }
     }
 
     /// Select all nodes based on name
     pub fn select(&self, name: Node) -> Database {
         unimplemented!();
     }
+
+    /// Merge two databases
+    /// Minimal merging is used
+    /// Merging of nodes is based on the name of the node. (all nodes will have different ids.)
+    pub fn merge(&mut self, other: Database) -> Database {
+
+        // generate_graphs
+        let (this_graph, this_retrieval) = self.generate_digraph();
+        let (other_graph, other_retrieval) = other.generate_digraph();
+
+        // Create a new db out of the old ones
+        let mut new_cnodes :BTreeMap<IdC, CNode> = BTreeMap::new();
+        let mut new_dnodes :BTreeMap<IdD, DNode> = BTreeMap::new();
+
+
+
+        // Find the starting points of a graph
+        let this_root_graph_labels: Vec<String> = this_graph
+            .node_indices()
+            .filter(|&node| this_graph.neighbors_directed(node, Direction::Incoming).count() == 0)
+            .map(|node| this_graph[node].clone())
+            .collect();
+
+        let other_root_graph_labels: Vec<String> = other_graph
+            .node_indices()
+            .filter(|&node| other_graph.neighbors_directed(node, Direction::Incoming).count() == 0)
+            .map(|node| other_graph[node].clone())
+            .collect();
+
+        let set: HashSet<String> = this_root_graph_labels.into_iter().chain(other_root_graph_labels.into_iter()).collect();
+        let combined: Vec<String> = set.into_iter().collect();
+
+        // Insert these nodes into the new database. Giving the priority to self
+        
+        for c in combined {
+            // Find the Node Object I want to insert
+            let node = match this_retrieval.get(&c) {
+                Some(value) => self.get(value.to_string()).expect("test"),
+                None => {match other_retrieval.get(&c) {
+                    Some(value) => other.get(value.to_string()).expect("test"),
+                    None => panic!("Could not retrieve a node that was already found.")
+                }}
+            };
+            // Insert the object into the new database.
+            match node {
+                Node::Calculation(value) => {new_cnodes.insert(value.id.clone(), value);},
+                Node::Data(value) => {new_dnodes.insert(value.id.clone(), value);}
+            }
+
+        }
+
+
+        // merge the two
+        
+        // // Convert to actual nodes
+        // for this_root_graph_index in this_root_graph_indexes {
+
+        //     let t_name = self.get(this_graph[this_root_graph_index]).get_label()
+
+        // }
+
+
+
+
+        let new_db = Database {
+            cnodes : new_cnodes,
+            dnodes : new_dnodes,
+            template : self.template.clone()};
+
+        new_db
+
+    }
+
+   
+
 
     /// Selects Future of given Node
     pub fn select_future(&self, start: DNode) -> Database {
@@ -439,22 +550,30 @@ impl Database {
 
 impl Database{
 
-
-    fn generate_digraph(&self) -> DiGraph::<String, String>{
+    /// Generates a graph
+    /// DiGraph. contains node names
+    /// BTreeMap - contains key - label; value - object id. (allows retrieving actual object)
+    /// I use this bocause in some places I want to find the orignal object given the label
+    fn generate_digraph(&self) -> (DiGraph::<String, String>, BTreeMap<String, String>){
         
         let mut graph = DiGraph::<String, String>::new(); // initialize the final graph
+        let mut back_retrieval: BTreeMap<String, String> = BTreeMap::new();
         // Define all graph node object and place them into a BTreeMap. Used for constructing the graph
         let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
         let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
         // Create nodes for the graph
         for (id, node) in self.cnodes.iter() {
-            let gn = graph.add_node(node.create_label());
+            let  node_name = node.get_label();
+            let gn = graph.add_node(node_name.clone());
             graph_nodes.insert(id.clone(), gn);
+            back_retrieval.insert(node_name.clone(), id.to_string());
         }
         for (id, node) in self.dnodes.iter() {
-            let gn = graph.add_node(node.create_label());
+            let  node_name = node.get_label();
+            let gn = graph.add_node(node_name.clone());
             graph_nodes.insert(id.clone(), gn);
+            back_retrieval.insert(node_name.clone(), id.to_string());
         }
 
 
@@ -483,7 +602,7 @@ impl Database{
         }
 
         graph.extend_with_edges(&edges);
-        return graph
+        return (graph, back_retrieval)
 
     }
 
