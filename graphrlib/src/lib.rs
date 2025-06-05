@@ -7,6 +7,14 @@ use std::collections::BTreeMap;
 use pyo3::prelude::*;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::fmt;
+
+use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
+use petgraph::dot::{Dot, Config};
+use petgraph::algo::has_path_connecting;
+
+
 
 /// Set types for interacting with the database
 type IdCTemplate = String;
@@ -14,7 +22,8 @@ type IdDTemplate = String;
 type IdC = u128;
 type IdD = u128;
 type IdTemplate = String;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+
 
 
 /// Describe Abstract Data and Calculation nodes
@@ -220,6 +229,17 @@ impl DatabaseTemplate {
 
     }
 
+    pub fn as_dot(&self) -> String {
+        let graph = self.generate_digraph();
+        format!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]))
+    }
+
+
+
+
+
+
+
     /// get a node from a template
     pub fn get(&self, name: String) -> NodeTemplate {
         unimplemented!();
@@ -286,6 +306,59 @@ impl DatabaseTemplate {
 }
 
 
+
+impl DatabaseTemplate {
+
+    /// Generate a graph object 
+    fn generate_digraph(& self) -> DiGraph::<&str, &str>{
+        
+        let mut graph = DiGraph::<&str, &str>::new(); // initialize the final graph
+        // Define all graph node object and place them into a BTreeMap. Used for constructing the graph
+        let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
+        let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
+
+        // Create nodes for the graph
+        for id in self.cnodes.keys() {
+            let gn = graph.add_node(id);
+            graph_nodes.insert(id.clone(), gn);
+        }
+        for id in self.dnodes.keys() {
+            let gn = graph.add_node(id);
+            graph_nodes.insert(id.clone(), gn);
+        }
+
+
+        // Add edges to the graph
+        // Go through all nodes
+        for (id, node) in self.cnodes.iter() {
+            // Go through all inputs in a node
+            for i_id in &node.incoming {
+                let starting_node =  match graph_nodes.get(i_id) {
+                    Some(value) => value,
+                    None => panic!("{}",format!{"Node {} has not been found in the diGraph object.", i_id})
+                };
+                let end_node = graph_nodes.get(id).expect(&format!("input {} found for {} calculation", &i_id, &id));
+                edges.push((*starting_node, *end_node));
+            }
+
+            for i_id in &node.outcoming {
+                let starting_node = graph_nodes.get(id).expect(&format!("input {} found for {} calculation", &i_id, &id));
+                let end_node =  match graph_nodes.get(i_id) {
+                    Some(value) => value,
+                    None => panic!("{}",format!{"Node {} has not been found in the diGraph object.", i_id})
+                };
+                edges.push((*starting_node, *end_node));
+
+            }
+        }
+
+        graph.extend_with_edges(&edges);
+        return graph
+
+    }
+}
+
+
 /// Describes implementations and actual calculations
 #[pyclass]
 pub struct Database {
@@ -337,6 +410,7 @@ impl Database {
     }
 
 }
+
 
 
 #[pymodule]
