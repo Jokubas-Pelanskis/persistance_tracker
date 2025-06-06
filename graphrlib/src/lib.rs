@@ -500,7 +500,9 @@ impl Database {
     }
 
 
-
+    /// Merge two databases
+    /// Merging is minimal - if nodes can be made the same - they will
+    /// nodes are same if 1) they have the same template tag; 2) have the same root nodes
     pub fn merge_new(&self, other: Database) -> Database {
 
         // generate_graphs
@@ -671,77 +673,18 @@ impl Database {
 
     }
 
-
-    /// Merge two databases
-    /// Minimal merging is used
-    // /// Merging of nodes is based on the name of the node. (all nodes will have different ids.)
-    // pub fn merge(&mut self, other: Database) -> Database {
-
-    //     // generate_graphs
-    //     let (this_graph, this_retrieval) = self.generate_digraph();
-    //     let (other_graph, other_retrieval) = other.generate_digraph();
-
-    //     // Create a new db out of the old ones
-    //     let mut new_cnodes :BTreeMap<IdC, CNode> = BTreeMap::new();
-    //     let mut new_dnodes :BTreeMap<IdD, DNode> = BTreeMap::new();
-
-
-
-    //     // Find the starting points of a graph
-    //     let this_root_graph_labels: Vec<String> = this_graph
-    //         .node_indices()
-    //         .filter(|&node| this_graph.neighbors_directed(node, Direction::Incoming).count() == 0)
-    //         .map(|node| this_graph[node].clone())
-    //         .collect();
-
-    //     let other_root_graph_labels: Vec<String> = other_graph
-    //         .node_indices()
-    //         .filter(|&node| other_graph.neighbors_directed(node, Direction::Incoming).count() == 0)
-    //         .map(|node| other_graph[node].clone())
-    //         .collect();
-
-    //     let set: HashSet<String> = this_root_graph_labels.into_iter().chain(other_root_graph_labels.into_iter()).collect();
-    //     let combined: Vec<String> = set.into_iter().collect();
-
-    //     // Insert these nodes into the new database. Giving the priority to self
-        
-    //     for c in combined {
-    //         // Find the Node Object I want to insert
-    //         let node = match this_retrieval.get(&c) {
-    //             Some(value) => self.get(value.to_string()).expect("test"),
-    //             None => {match other_retrieval.get(&c) {
-    //                 Some(value) => other.get(value.to_string()).expect("test"),
-    //                 None => panic!("Could not retrieve a node that was already found.")
-    //             }}
-    //         };
-    //         // Insert the object into the new database.
-    //         match node {
-    //             Node::Calculation(value) => {new_cnodes.insert(value.id.clone(), value);},
-    //             Node::Data(value) => {new_dnodes.insert(value.id.clone(), value);}
-    //         }
-
-    //     }
-
-    //     let new_db = Database {
-    //         cnodes : new_cnodes,
-    //         dnodes : new_dnodes,
-    //         template : self.template.clone()};
-
-    //     new_db
-
-    // }
-
    
 
-
     /// Selects Future of given Node
-    pub fn select_future(&self, start: DNode) -> Database {
+    pub fn select_future(&self, start: String) -> Database {
         unimplemented!();
     }
 
     /// Select History of a given node
-    pub fn select_history(&self, start:DNode) -> Database {
-        unimplemented!();
+    pub fn select_history(&self, name: String) -> Database {
+        let subgraph = self.select_node_history(name);
+        let graph = self.digraph_to_database(&subgraph);
+        graph
     }
 
     /// Convert to nodes
@@ -816,6 +759,95 @@ impl Database{
         return (graph, back_retrieval)
 
     }
+
+
+    pub fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> Database {
+
+        let mut cnodes: BTreeMap<String, CNode> = BTreeMap::new();
+        let mut dnodes: BTreeMap<String, DNode> = BTreeMap::new();
+
+        for node_id in graph.node_indices() {
+            let node_name = graph.node_weight(node_id).expect("Failed to get a node name");
+            
+            // handle the calculation node 
+            if self.cnodes.contains_key(node_name) {
+                cnodes.insert(node_name.clone(), self.cnodes.get(node_name).expect("failed").clone());
+                continue
+            }   
+            if self.dnodes.contains_key(node_name) {
+                dnodes.insert(node_name.clone(), self.dnodes.get(node_name).expect("failed").clone());
+                continue
+            }
+        }
+
+        Database {cnodes : cnodes, dnodes : dnodes, template: self.template.clone()}
+    }
+
+
+    pub fn select_node_history(&self, name: String) -> DiGraph<String, ()> {
+
+        let mut new_graph: DiGraph<String, ()> = DiGraph::new();
+        let (current_graph, current_node_name_map) = self.generate_digraph();
+        let origin_node = current_graph.node_indices().find(|&node| current_graph[node] == name).expect("failed to find the origin node! Wrong name provided.");
+        
+        // Create a mapping between original node indices and new node indices
+        let mut node_mapping: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+        
+        // Find all calculation nodes that needed to produce the calculation.
+        for (node_index, node_name) in current_node_name_map.iter() {
+            if self.cnodes.contains_key(node_name) && has_path_connecting(&current_graph, *node_index, origin_node, None) {
+                // Create a new node with an owned String
+                let new_idx = new_graph.add_node(node_name.clone());
+                node_mapping.insert(*node_index, new_idx);
+
+                // Instert calculation nodes inputs and outputs to the mapping
+                for input_name in &self.cnodes.get(node_name).expect("failed to find a calculation node").incoming {
+                    let new_idx = new_graph.add_node(input_name.clone());
+                    let old_idx = current_graph.node_indices().find(|&node| current_graph[node] == name).expect("Failed to find a node");
+                    node_mapping.insert(old_idx, new_idx);
+
+                }
+                for output_name in &self.cnodes.get(node_name).expect("failed to find a calculation node").outcoming {
+                    let new_idx = new_graph.add_node(output_name.clone());
+                    let old_idx = current_graph.node_indices().find(|&node| current_graph[node] == name).expect("Failed to find a node");
+                    node_mapping.insert(old_idx, new_idx);
+                }
+            }
+        }
+
+
+
+        
+        // Now add the edges between the nodes in the new graph
+        for (node_index,node_name) in current_node_name_map.iter() {
+            if let Some(&new_idx) = node_mapping.get(node_index) {
+                if self.cnodes.contains_key(node_name) {
+                    let calc_node = self.cnodes.get(node_name).expect("failed to get the node.");
+                    
+                    // Add edges for inputs
+                    for inp in &calc_node.incoming {
+                        if let Some(input_node) = current_graph.node_indices().find(|&node| current_graph[node] == inp.clone()) {
+                            if let Some(&new_input_idx) = node_mapping.get(&input_node) {
+                                new_graph.add_edge(new_input_idx, new_idx, ());
+                            }
+                        }
+                    }
+                    
+                    // Add edges for outputs
+                    for outp in &calc_node.outcoming {
+                        if let Some(output_node) = current_graph.node_indices().find(|&node| current_graph[node] == outp.clone()) {
+                            if let Some(&new_output_idx) = node_mapping.get(&output_node) {
+                                new_graph.add_edge(new_idx, new_output_idx, ());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        new_graph
+    }
+
 
 
 }
