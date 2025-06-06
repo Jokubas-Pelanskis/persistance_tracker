@@ -691,8 +691,10 @@ impl Database {
    
 
     /// Selects Future of given Node
-    pub fn select_future(&self, start: String) -> Database {
-        unimplemented!();
+    pub fn select_future(&self, name: String) -> Database {
+        let subgraph = self.select_node_future(name);
+        let graph = self.digraph_to_database(&subgraph);
+        graph
     }
 
     /// Select History of a given node
@@ -862,6 +864,73 @@ impl Database{
 
         new_graph
     }
+
+
+
+    pub fn select_node_future(&self, name: String) -> DiGraph<String, ()> {
+
+        let mut new_graph: DiGraph<String, ()> = DiGraph::new();
+        let (mut current_graph, current_node_name_map) = self.generate_digraph();
+        let origin_node = current_graph.node_indices().find(|&node| current_graph[node] == name).expect("failed to find the origin node! Wrong name provided.");
+        current_graph.reverse();
+        // Create a mapping between original node indices and new node indices
+        let mut node_mapping: BTreeMap<NodeIndex, NodeIndex> = BTreeMap::new();
+        
+        // Find all calculation nodes that needed to produce the calculation.
+        for (node_index, node_name) in current_node_name_map.iter() {
+            if self.cnodes.contains_key(node_name) && has_path_connecting(&current_graph, *node_index, origin_node, None) {
+                // Create a new node with an owned String
+                let new_idx = new_graph.add_node(node_name.clone());
+                node_mapping.insert(*node_index, new_idx);
+
+                // Instert calculation nodes inputs and outputs to the mapping
+                for input_name in &self.cnodes.get(node_name).expect("failed to find a calculation node").incoming {
+                    let new_idx = new_graph.add_node(input_name.clone());
+                    let old_idx = current_graph.node_indices().find(|&node| current_graph[node] == name).expect("Failed to find a node");
+                    node_mapping.insert(old_idx, new_idx);
+
+                }
+                for output_name in &self.cnodes.get(node_name).expect("failed to find a calculation node").outcoming {
+                    let new_idx = new_graph.add_node(output_name.clone());
+                    let old_idx = current_graph.node_indices().find(|&node| current_graph[node] == name).expect("Failed to find a node");
+                    node_mapping.insert(old_idx, new_idx);
+                }
+            }
+        }
+
+
+
+        
+        // Now add the edges between the nodes in the new graph
+        for (node_index,node_name) in current_node_name_map.iter() {
+            if let Some(&new_idx) = node_mapping.get(node_index) {
+                if self.cnodes.contains_key(node_name) {
+                    let calc_node = self.cnodes.get(node_name).expect("failed to get the node.");
+                    
+                    // Add edges for inputs
+                    for inp in &calc_node.incoming {
+                        if let Some(input_node) = current_graph.node_indices().find(|&node| current_graph[node] == inp.clone()) {
+                            if let Some(&new_input_idx) = node_mapping.get(&input_node) {
+                                new_graph.add_edge(new_input_idx, new_idx, ());
+                            }
+                        }
+                    }
+                    
+                    // Add edges for outputs
+                    for outp in &calc_node.outcoming {
+                        if let Some(output_node) = current_graph.node_indices().find(|&node| current_graph[node] == outp.clone()) {
+                            if let Some(&new_output_idx) = node_mapping.get(&output_node) {
+                                new_graph.add_edge(new_idx, new_output_idx, ());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        new_graph.reverse();
+        new_graph
+    }
+
 
 
 
