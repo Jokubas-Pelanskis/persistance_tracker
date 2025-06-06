@@ -12,7 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::fmt;
 use std::collections::{HashSet, VecDeque};
 use std::cmp::Ordering;
-
+use std::path::{Path, PathBuf};
+use serde_json::{Value, Map};
+use std::io::Write;
 use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
 use petgraph::Direction;
 use petgraph::dot::{Dot, Config};
@@ -62,7 +64,7 @@ enum NodeTemplate {
 
 /// Describes abstract calculations.
 #[pyclass]
-#[derive(Clone)]
+#[derive(Clone,serde::Serialize)]
 pub struct DatabaseTemplate {
     id: IdTemplate,
     cnodes: BTreeMap<IdCTemplate, CNodeTemplate>, // Store all calculation nodes
@@ -71,7 +73,7 @@ pub struct DatabaseTemplate {
 
 /// Describes implementations and actual calculations
 #[pyclass]
-#[derive(Clone)]
+#[derive(Clone,serde::Serialize)]
 pub struct Database {
 
     template: DatabaseTemplate, // Store the template
@@ -712,9 +714,28 @@ impl Database {
     fn read(&self) -> Database {
         unimplemented!();
     }
+    pub fn write(&self, folder: String) -> PyResult<()> {
+        let path = Path::new(&folder);
 
-    pub fn write(&self, folder: &str) -> Result<(), io::Error>{
-        unimplemented!();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                pyo3::exceptions::PyIOError::new_err(format!("Failed to create directory: {e}"))
+            })?;
+        }
+
+        let mut file = std::fs::File::create(&path).map_err(|e| {
+            pyo3::exceptions::PyIOError::new_err(format!("Failed to create file: {e}"))
+        })?;
+
+        let write_string = serde_json::to_string_pretty(self).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Serialization failed: {e}"))
+        })?;
+
+        file.write_all(write_string.as_bytes()).map_err(|e| {
+            pyo3::exceptions::PyIOError::new_err(format!("Failed to write file: {e}"))
+        })?;
+
+        Ok(())
     }
 
 }
