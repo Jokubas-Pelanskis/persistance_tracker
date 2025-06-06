@@ -713,7 +713,7 @@ impl Database {
         unimplemented!();
     }
 
-    fn write(&self) -> Database {
+    pub fn write(&self, folder: &str) -> Result<(), io::Error>{
         unimplemented!();
     }
 
