@@ -494,9 +494,24 @@ impl Database {
         }
     }
 
-    /// Select all nodes based on name
-    pub fn select(&self, name: Node) -> Database {
-        unimplemented!();
+    /// Select all nodes in the same template class
+    pub fn select_similar(&self, template_name: String) -> Vec<String> {
+        
+        let mut filtered_names: Vec<String> = Vec::new();
+
+        for (key, cnode) in self.cnodes.iter() {
+            if cnode.template == template_name {
+                filtered_names.push(cnode.get_label().clone());
+            }
+        }
+        for (key, cnode) in self.dnodes.iter() {
+            if cnode.template == template_name {
+                filtered_names.push(cnode.get_label().clone());
+            }
+        }
+
+        filtered_names
+
     }
 
 
