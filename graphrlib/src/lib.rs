@@ -27,6 +27,8 @@ type IdCTemplate = String;
 type IdDTemplate = String;
 type IdC = String;
 type IdD = String;
+type IdNode = String; // Id of a general node (could be IdC or IdD)
+type IdNodeTemplate = String;
 type IdTemplate = String;
 
 
@@ -55,6 +57,7 @@ enum NodeTemplate {
     Calculation(CNodeTemplate),
     Data(DNodeTemplate),
 }
+
 
 
 /// Describes abstract calculations.
@@ -136,6 +139,7 @@ impl Node {
 
 
 }
+
 
 
 
@@ -287,7 +291,7 @@ impl DatabaseTemplate {
 
     /// Return the database in DOT format
     pub fn as_dot(&self) -> String {
-        let graph = self.generate_digraph();
+        let (graph,mapping) = self.generate_digraph();
         format!("{}", Dot::with_config(&graph, &[Config::EdgeNoLabel]))
     }
 
@@ -308,6 +312,23 @@ impl DatabaseTemplate {
         let mut new_cnodes = BTreeMap::new();
         let mut dnode_mapping = BTreeMap::new(); // for fully mapping data nodes
         
+        // Check if all root nodes have specified names
+        // This is needed due to the imposed workflow.
+
+        let root_nodes = self.find_root_nodes();
+        let mut correct_input: bool = true;
+        let mut error_message = String::from("");
+        for rn in root_nodes {
+            correct_input = leafs.contains_key(&rn);
+            if !correct_input {
+                error_message += &format!("Need to provide name for {}\n", rn);
+            }
+        }
+        if !correct_input {
+            panic!("{}",&error_message)
+        }
+
+
         // data nodes
         for (key, value) in &self.dnodes {
             // Create the node
@@ -363,21 +384,30 @@ impl DatabaseTemplate {
 
 impl DatabaseTemplate {
 
-    fn generate_digraph(&self) -> DiGraph::<String, String>{
+    /// Generates a graph
+    /// DiGraph. contains node names
+    /// BTreeMap - contains key - graph NodeIndex; value - object id. (allows retrieving actual object)
+    /// I use this bocause in some places I want to find the orignal object given the label
+    fn generate_digraph(&self) -> (DiGraph::<String, String>, BTreeMap<NodeIndex, String>){
         
         let mut graph = DiGraph::<String, String>::new(); // initialize the final graph
+        let mut back_retrieval: BTreeMap<NodeIndex, String> = BTreeMap::new();
         // Define all graph node object and place them into a BTreeMap. Used for constructing the graph
         let mut graph_nodes:  BTreeMap<String, NodeIndex> = BTreeMap::new(); // node storage thing
         let mut edges: Vec<(NodeIndex,NodeIndex)> = Vec::new(); 
 
         // Create nodes for the graph
-        for id in self.cnodes.keys() {
-            let gn = graph.add_node(id.clone());
+        for (id, node) in self.cnodes.iter() {
+            let  node_name = node.id.clone();
+            let gn = graph.add_node(node_name.clone());
             graph_nodes.insert(id.clone(), gn);
+            back_retrieval.insert(gn, id.to_string());
         }
-        for id in self.dnodes.keys() {
-            let gn = graph.add_node(id.clone());
+        for (id, node) in self.dnodes.iter() {
+            let  node_name = node.id.clone();
+            let gn = graph.add_node(node_name.clone());
             graph_nodes.insert(id.clone(), gn);
+            back_retrieval.insert(gn, id.to_string());
         }
 
 
@@ -406,9 +436,22 @@ impl DatabaseTemplate {
         }
 
         graph.extend_with_edges(&edges);
-        return graph
+        return (graph, back_retrieval)
 
     }
+
+    /// Find all root nodes (all input files needed to implement the template.)
+    fn find_root_nodes(&self) -> HashSet<IdNodeTemplate> {
+
+        let (graph, mappings) = self.generate_digraph();
+
+        graph
+        .node_indices()
+        .filter(|&node| graph.neighbors_directed(node, Direction::Incoming).next().is_none())
+        .filter_map(|node_id| mappings.get(&node_id).cloned())  // get and clone the IdNodeTemplate
+        .collect()
+}
+
 }
 
 
@@ -773,6 +816,7 @@ impl Database{
         return (graph, back_retrieval)
 
     }
+
 
 }
 
