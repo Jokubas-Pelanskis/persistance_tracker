@@ -11,7 +11,7 @@ use regex::Regex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::fmt;
 use std::collections::{HashSet, VecDeque};
-
+use std::cmp::Ordering;
 
 use petgraph::graph::{NodeIndex, DiGraph, UnGraph};
 use petgraph::Direction;
@@ -124,6 +124,13 @@ impl Node {
         match self {
             Node::Calculation(a) => a.get_label(),
             Node::Data(a) => a.get_label()
+        }
+    }
+
+    fn get_id(&self) -> String {
+        match self {
+            Node::Calculation(a) => a.id.clone(),
+            Node::Data(a) => a.id.clone()
         }
     }
 
@@ -461,11 +468,37 @@ impl Database {
         let mut new_cnodes :BTreeMap<IdC, CNode> = BTreeMap::new();
         let mut new_dnodes :BTreeMap<IdD, DNode> = BTreeMap::new();
 
+        // Will store all ids
+        let mut mapper: BTreeMap<NodeIdentifier, Node> = BTreeMap::new();
+        let mut data_id_overwrites: BTreeMap<String, String> = BTreeMap::new(); // For renaming some of the nodes to keep things in order
+
         /// Structure that stores data needed to assert if two nodes are the same or not
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq)]
         struct NodeIdentifier {
             template: String,
             root_node_names: HashSet<String>,
+        }
+        impl Ord for NodeIdentifier {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // First compare templates
+                match self.template.cmp(&other.template) {
+                    Ordering::Equal => {
+                        // Then compare sorted vectors from HashSets
+                        let mut self_vec: Vec<_> = self.root_node_names.iter().collect();
+                        let mut other_vec: Vec<_> = other.root_node_names.iter().collect();
+                        self_vec.sort();
+                        other_vec.sort();
+                        self_vec.cmp(&other_vec)
+                    }
+                    ord => ord,
+                }
+            }
+        }
+        
+        impl PartialOrd for NodeIdentifier {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
         }
 
         fn find_roots_from_node(graph: &DiGraph<String, String>, start: NodeIndex) -> HashSet<String> {
@@ -497,34 +530,101 @@ impl Database {
         }
 
 
-        // Will store all ids
-        let mut mapper: BTreeMap<String, NodeIdentifier> = BTreeMap::new();
 
-        for node in this_graph.node_indices() {
-
-            let roots = find_roots_from_node(&this_graph,node);
-            let node_id = this_retrieval.get(&node).unwrap();
-            let node_obj = self.get(node_id.clone()).unwrap();
+        // Go through the other object
+        for node in other_graph.node_indices() {
+            let roots = find_roots_from_node(&other_graph,node);
+            let node_id = other_retrieval.get(&node).unwrap();
+            let node_obj = other.get(node_id.clone()).unwrap();
 
             let (template, id) = match node_obj {
                 Node::Calculation(value) => {
                     let template = value.template;
-                    let id = value.id;
-                    (template, id)
+                    let x = other.get(value.id.clone()).expect(&format!("could not find {} in the other database",value.id.clone()));
+                    (template, x)
                 }
                 Node::Data(value) => {
                     let template = value.template;
-                    let id = value.id;
-                    (template, id)
+                    let x = other.get(value.id.clone()).expect(&format!("could not find {} in the other database",value.id.clone()));
+                    (template, x)
                 }
             };
+            mapper.insert(NodeIdentifier {template :template, root_node_names : roots},id);
+        }
 
-            mapper.insert(id, NodeIdentifier {template :template, root_node_names : roots});
+        // Go through the self object
+        for node in this_graph.node_indices() {
+            let roots = find_roots_from_node(&this_graph,node);
+            let node_id = this_retrieval.get(&node).unwrap();
+            let node_obj = self.get(node_id.clone()).unwrap();
+
+            let (template, id) = match &node_obj {
+                Node::Calculation(value) => {
+                    let template = value.template.clone();
+                    let x = self.get(value.id.clone()).expect(&format!("could not find {} in the this database",value.id.clone()));
+                    (template, x)
+                }
+                Node::Data(value) => {
+                    let template = value.template.clone();
+                    let x = self.get(value.id.clone()).expect(&format!("could not find {} in the this database",value.id.clone()));
+                    (template, x)
+                    
+                }
+            };
+            
+            
+            let node_identifier = NodeIdentifier {template :template.clone(), root_node_names : roots.clone()};
+
+            // Check if this key already exists. If id does, then if it's a computing node
+            // the key needs to be modified.
+
+            if let Some(mapped) = mapper.get(&node_identifier) {
+                // Insert the id I found and insert the new id
+                match &node_obj {
+                    Node::Calculation(value) => {
+                        data_id_overwrites.insert(mapped.get_id(), value.id.clone());
+                    },
+                    Node::Data(value) => {
+                        data_id_overwrites.insert(mapped.get_id(), value.id.clone());
+                    },
+                }
+            }
+
+            mapper.insert(NodeIdentifier {template :template, root_node_names : roots},id);
+        }
+
+        // Create a new database
+
+        for (key, value) in mapper.iter(){
+            match value {
+                Node::Calculation(value) => {
+                    let mut insert_cnode = value.clone();
+                    
+                    for v in &mut insert_cnode.incoming {
+                        if let Some(replacement) = data_id_overwrites.get(v) {
+                            *v = replacement.clone();
+                        }
+                    }
+
+                    for v in &mut insert_cnode.outcoming {
+                        if let Some(replacement) = data_id_overwrites.get(v) {
+                            *v = replacement.clone();
+                        }
+                    }
+
+                    new_cnodes.insert(value.id.clone(),insert_cnode);
+                },
+                Node::Data(value) => {new_dnodes.insert(value.id.clone(), value.clone());}
+            }
+
+
 
         }
-        println!("{:?}", mapper);
 
-        other
+        Database{ cnodes: new_cnodes,
+            dnodes: new_dnodes,
+            template: self.template.clone()
+        }
 
     }
 
