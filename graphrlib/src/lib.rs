@@ -6,6 +6,7 @@ DNode - Only contains abstract calculations. real data are only described by loc
 use std::collections::BTreeMap;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
+use pyo3::types::PyType;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -64,7 +65,7 @@ enum NodeTemplate {
 
 /// Describes abstract calculations.
 #[pyclass]
-#[derive(Clone,serde::Serialize)]
+#[derive(Clone,serde::Serialize,Deserialize)]
 pub struct DatabaseTemplate {
     id: IdTemplate,
     cnodes: BTreeMap<IdCTemplate, CNodeTemplate>, // Store all calculation nodes
@@ -73,7 +74,7 @@ pub struct DatabaseTemplate {
 
 /// Describes implementations and actual calculations
 #[pyclass]
-#[derive(Clone,serde::Serialize)]
+#[derive(Clone,serde::Serialize,Deserialize)]
 pub struct Database {
 
     template: DatabaseTemplate, // Store the template
@@ -461,12 +462,20 @@ impl DatabaseTemplate {
 #[pymethods]
 impl Database {
 
+
     fn __str__(&self) -> PyResult<String> {
 
         let cnodes = format!("{:?}", self.cnodes);
         let dnodes = format!("{:?}", self.dnodes);
         Ok(format!("DatabaseTemplate(cnodes={};\ndnodes={})",cnodes, dnodes  ))
     }
+
+
+    #[getter]
+    pub fn template(&self) -> DatabaseTemplate {
+        self.template.clone()
+    }
+
 
     pub fn as_dot(&self) -> String {
         let (graph, retrieval) = self.generate_digraph();
@@ -711,9 +720,7 @@ impl Database {
         unimplemented!();
     }
 
-    fn read(&self) -> Database {
-        unimplemented!();
-    }
+
     pub fn write(&self, folder: String) -> PyResult<()> {
         let path = Path::new(&folder);
 
@@ -737,6 +744,19 @@ impl Database {
 
         Ok(())
     }
+
+    #[classmethod]
+    pub fn read(_cls: &Bound<'_, PyType>, path: String) -> PyResult<Self> {
+        let content = std::fs::read_to_string(Path::new(&path)).map_err(|e| {
+            pyo3::exceptions::PyIOError::new_err(format!("Failed to read file: {e}"))
+        })?;
+
+        serde_json::from_str(&content).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Failed to parse JSON: {e}"))
+        })
+    }
+
+
 
 }
 
@@ -952,10 +972,8 @@ impl Database{
         new_graph
     }
 
-
-
-
 }
+
 
 
 
