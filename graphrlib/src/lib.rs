@@ -492,6 +492,8 @@ impl Database {
         self.template.register_dnode(name)
     }
 
+    /// Register a new calculation
+    /// If a calculation already exists, then update the whole database with the new command.
     fn template_register_cnode(&mut self, name:String, command : String ) -> CNodeTemplate{
         self.template.register_cnode(name, command)
     }
