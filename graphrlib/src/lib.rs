@@ -65,9 +65,8 @@ enum NodeTemplate {
 
 /// Describes abstract calculations.
 #[pyclass]
-#[derive(Clone,serde::Serialize,Deserialize)]
+#[derive(Clone,serde::Serialize,Deserialize,Debug)]
 pub struct DatabaseTemplate {
-    id: IdTemplate,
     cnodes: BTreeMap<IdCTemplate, CNodeTemplate>, // Store all calculation nodes
     dnodes: BTreeMap<IdDTemplate, DNodeTemplate>, // Store all data nodes
 }
@@ -77,11 +76,13 @@ pub struct DatabaseTemplate {
 #[derive(Clone,serde::Serialize,Deserialize)]
 pub struct Database {
 
-    template: DatabaseTemplate, // Store the template
+    template: DatabaseTemplate,
+    // template: DatabaseTemplate, // Store the template
     cnodes: BTreeMap<IdC, CNode>, // Store all calculation nodes
     dnodes: BTreeMap<IdD, DNode>, // Store all data nodes
 
 }
+
 
 
 /// describe imlementations of nodes (These will have names with time stamps)
@@ -244,9 +245,8 @@ impl CNode {
 impl DatabaseTemplate {
 
     #[new]
-    pub fn new(name: IdCTemplate) -> Self {
+    pub fn new() -> Self {
         DatabaseTemplate {
-            id : name,
             cnodes: BTreeMap::new(),
             dnodes: BTreeMap::new(),
         }
@@ -463,17 +463,45 @@ impl DatabaseTemplate {
 impl Database {
 
 
+    #[new]
+    pub fn new() -> Self {
+        let template = DatabaseTemplate {
+            cnodes: BTreeMap::new(),
+            dnodes: BTreeMap::new(),
+        };
+
+        Database {
+            template : template,
+            cnodes:BTreeMap::new(),
+            dnodes:BTreeMap::new(),
+        }
+
+    }
+
+
     fn __str__(&self) -> PyResult<String> {
 
         let cnodes = format!("{:?}", self.cnodes);
         let dnodes = format!("{:?}", self.dnodes);
-        Ok(format!("DatabaseTemplate(cnodes={};\ndnodes={})",cnodes, dnodes  ))
+        let template = format!("{:?}", self.template);
+        Ok(format!("Database(\ntemplate={}\ncnodes={};\ndnodes={}\n)",template,cnodes, dnodes  ))
     }
 
+    /// methods to interact with the template object.
+    fn template_register_dnode(&mut self, name:String ) -> DNodeTemplate {
+        self.template.register_dnode(name)
+    }
 
-    #[getter]
-    pub fn template(&self) -> DatabaseTemplate {
-        self.template.clone()
+    fn template_register_cnode(&mut self, name:String, command : String ) -> CNodeTemplate{
+        self.template.register_cnode(name, command)
+    }
+
+    fn template_as_dot(&self) -> String {
+        self.template.as_dot()
+    }
+
+    pub fn template_create_calculation(&self, leafs: BTreeMap<String, String>) -> Database {
+        self.template.create_calculation(leafs)
     }
 
 
@@ -526,10 +554,10 @@ impl Database {
     }
 
 
-    /// Merge two databases
+    /// Adds a given Database to the existing one.
     /// Merging is minimal - if nodes can be made the same - they will
     /// nodes are same if 1) they have the same template tag; 2) have the same root nodes
-    pub fn merge_new(&self, other: Database) -> Database {
+    pub fn register_pipeline(&self, other: Database) -> Database {
 
         // generate_graphs
         let (this_graph, this_retrieval) = self.generate_digraph();
