@@ -46,7 +46,7 @@ pub struct DNodeTemplate {
 
 
 #[pyclass]
-#[derive(Serialize, Deserialize, Default,Clone, Debug)]
+#[derive(Serialize, Deserialize, Default,Clone, Debug, PartialEq, Eq)]
 pub struct CNodeTemplate {
     pub id: IdCTemplate,
     pub command: String,
@@ -271,13 +271,8 @@ impl DatabaseTemplate {
         dnode
     }
 
-    /// Register calculation node
-    /// If a key already exists, then comprate the value. If the values are the same do nothing,
-    /// If they are different then crash, otherwise, overwrite flag is passed
-    pub fn register_cnode(&mut self, name: String, command: String) -> CNodeTemplate {
-        
 
-
+    pub fn create_calculation_node(&self, name:String, command: String) -> CNodeTemplate {
         let values = CNodeTemplate::parse_command(command);
 
         let cnode = CNodeTemplate {
@@ -286,6 +281,14 @@ impl DatabaseTemplate {
             outcoming: values.2,
             command: values.0,
         };
+        cnode
+    }
+
+    /// Register calculation node
+    /// If a key already exists, then comprate the value. If the values are the same do nothing,
+    /// If they are different then crash, otherwise, overwrite flag is passed
+    pub fn register_cnode(&mut self, name: String, command: String) -> CNodeTemplate {
+        let cnode = self.create_calculation_node(name.clone(), command);
 
         self.cnodes.insert(name, cnode.clone());
         cnode
@@ -495,7 +498,34 @@ impl Database {
     /// Register a new calculation
     /// If a calculation already exists, then update the whole database with the new command.
     fn template_register_cnode(&mut self, name:String, command : String ) -> CNodeTemplate{
-        self.template.register_cnode(name, command)
+
+        /// Check if the node has chaned of been overwritten
+        let node_id = match self.template.cnodes.get(&name) {
+            Some(old_node) => {
+                let new_node = self.template.create_calculation_node(name, command);
+                
+                // Need to handle the case when a node inserted in the 
+                // template is different
+                // Need to go through the whole database and find all these nodes and modify them
+                // Cases I could have:
+                // 1) Connection is added locally, then all file names should be looked up in the local graph
+                // 2) A new file is added
+                // 2.1) All existing nodes in the database should have the same input file
+                // 2.2) All existing nodes in the databese should get a different calculation
+                // 3) The node is deleted. - Easy, just overwrite with the new
+                if new_node != *old_node {
+                    println!("A node exist and it's the not same");
+
+                }
+
+                new_node
+            },
+            None => {self.template.register_cnode(name, command)}
+
+        };
+
+        node_id
+        
     }
 
     fn template_as_dot(&self) -> String {
