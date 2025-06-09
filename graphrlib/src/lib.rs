@@ -183,7 +183,7 @@ impl DNodeTemplate {
 #[pymethods]
 impl CNodeTemplate {
     fn __str__(&self) -> PyResult<String> {
-        Ok(format!("DNodeTemplate(id={};\ncommand={},\ninput={:?},\noutput={:?})", self.id, self.command,self.incoming,self.outcoming ))
+        Ok(format!("DNodeTemplate(id={};\ninput={:?},\noutput={:?})", self.id,self.incoming,self.outcoming ))
     }
 
 }
@@ -838,6 +838,31 @@ impl Database {
         unimplemented!();
     }
 
+    /// generate the full command to run.
+    /// root_folder - prepend a string to all commands.
+    fn get_command(&self,cnode_id: String, root_folder: String) -> String {
+
+        // Go through all inputs and outputs and replace them with appropriate inputs
+
+        let cnode = self.cnodes.get(&cnode_id).expect(&format!("Failed to find '{}' among the calculation nodes!", cnode_id));
+
+        let template_cnode = self.template.cnodes.get(&cnode.template).expect("Failed to find the template node.");
+
+        let mut full_command = template_cnode.command.clone();
+
+
+        for (i, i_id) in cnode.incoming.iter().enumerate() {
+            full_command = full_command.replace(&format!("$i_{}", i), &format!("{}/{}",root_folder,i_id));
+        }
+
+
+        for (o, o_id) in cnode.outcoming.iter().enumerate() {
+            full_command = full_command.replace(&format!("$o_{}", o), &format!("{}/{}",root_folder,o_id));
+        }
+
+        full_command
+
+    }
 
     pub fn write(&self, folder: String) -> PyResult<()> {
         let path = Path::new(&folder);
