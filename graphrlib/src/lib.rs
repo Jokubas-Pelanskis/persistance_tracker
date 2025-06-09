@@ -92,9 +92,9 @@ pub struct DNode {
     #[pyo3(get)]
     pub id: IdD,
     #[pyo3(get)]
-    pub template: IdDTemplate,
-    #[pyo3(get)]
-    pub true_name: Option<String> // If the name is given then this is used, if not, then name is created from a combination of id and template
+    pub template: IdDTemplate
+
+
 }
 
 /// Describes an abstract calculation node
@@ -133,14 +133,9 @@ impl Node {
         now
     }
 
-    fn get_label(&self) -> String {
-        match self {
-            Node::Calculation(a) => a.get_label(),
-            Node::Data(a) => a.get_label()
-        }
-    }
 
-    fn get_id(&self) -> String {
+    #[getter]
+    fn id(&self) -> String {
         match self {
             Node::Calculation(a) => a.id.clone(),
             Node::Data(a) => a.id.clone()
@@ -148,7 +143,22 @@ impl Node {
     }
 
 
-}
+    }
+
+
+    // fn get_label(&self) -> String {
+    //     match self {
+    //         Node::Calculation(a) => a.get_label(),
+    //         Node::Data(a) => a.get_label()
+    //     }
+    // }
+
+    // fn get_id(&self) -> String {
+    //     match self {
+    //         Node::Calculation(a) => a.id.clone(),
+    //         Node::Data(a) => a.id.clone()
+    //     }
+    // }
 
 
 
@@ -218,30 +228,6 @@ impl CNodeTemplate {
 
         (output.to_string(), inputs, outputs)
 
-    }
-}
-
-
-impl DNode {
-    pub fn get_label(&self) -> String{
-
-        match &self.true_name {
-            Some(value) => value.clone(),
-            None => {
-                let uuid = self.id.clone();
-                let base_name = self.template.clone();
-                format!("{}{}",uuid, base_name)
-            }
-        }
-
-    }
-}
-
-impl CNode {
-    pub fn get_label(&self) -> String{
-        let uuid = self.id.clone();
-        let base_name = self.template.clone();
-        format!("{}{}",uuid, base_name)
     }
 }
 
@@ -344,17 +330,20 @@ impl DatabaseTemplate {
         // data nodes
         for (key, value) in &self.dnodes {
             // Create the node
-            let cid = Node::generate_id();
+            
+            let new_id = match leafs.get(&value.id) {
+                Some(value) => {value.clone()},
+                None => {Node::generate_id()}
+            };
 
             let dnode = DNode {
-                id: cid.clone(),
+                id: new_id.clone(),
                 template: value.id.clone(),
-                true_name: leafs.get(&value.id).cloned() 
             };
             // insert into the final
-            new_dnodes.insert(cid.clone(), dnode);
+            new_dnodes.insert(new_id.clone(), dnode);
             // insert into the remaping
-            dnode_mapping.insert(key, cid.clone());
+            dnode_mapping.insert(key, new_id.clone());
 
         }
 
@@ -709,10 +698,10 @@ impl Database {
                 // Insert the id I found and insert the new id
                 match &node_obj {
                     Node::Calculation(value) => {
-                        data_id_overwrites.insert(mapped.get_id(), value.id.clone());
+                        data_id_overwrites.insert(mapped.id(), value.id.clone());
                     },
                     Node::Data(value) => {
-                        data_id_overwrites.insert(mapped.get_id(), value.id.clone());
+                        data_id_overwrites.insert(mapped.id(), value.id.clone());
                     },
                 }
             }
@@ -764,12 +753,15 @@ impl Database {
         if !self.template.dnodes.contains_key(&template_id) {
             panic!("DNode with template id {} does not exist. Make sure that this type of dnode is registered among the templates and that your're providing a Data Node.", template_id);
         }
-        let node_id = Node::generate_id();
+
+        let node_id = match name {
+            Some(value) => value,
+            None => Node::generate_id()
+            };
 
         // Create a dnode
         let new_dnode = DNode { id: node_id.clone(),
                                 template: template_id.clone(),
-                                true_name: name
                             };
 
         self.dnodes.insert(node_id, new_dnode.clone());
@@ -902,14 +894,14 @@ impl Database{
 
         // Create nodes for the graph
         for (id, node) in self.cnodes.iter() {
-            let  node_name = node.get_label();
-            let gn = graph.add_node(node_name.clone());
+
+            let gn = graph.add_node(node.id.clone());
             graph_nodes.insert(id.clone(), gn);
             back_retrieval.insert(gn, id.to_string());
         }
         for (id, node) in self.dnodes.iter() {
-            let  node_name = node.get_label();
-            let gn = graph.add_node(node_name.clone());
+
+            let gn = graph.add_node(node.id.clone());
             graph_nodes.insert(id.clone(), gn);
             back_retrieval.insert(gn, id.to_string());
         }
