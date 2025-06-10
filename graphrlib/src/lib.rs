@@ -484,6 +484,9 @@ impl Database {
         Ok(format!("Database(\ntemplate={}\ncnodes={};\ndnodes={}\n)",template,cnodes, dnodes  ))
     }
 
+
+
+
     /// methods to interact with the template object.
     fn template_register_dnode(&mut self, name:String ) -> DNodeTemplate {
         self.template.register_dnode(name)
@@ -888,15 +891,38 @@ impl Database {
         Ok(())
     }
 
+
+
+    /// Read the databsase.
+    /// If a file exist then it's read as normal.
+    /// If it does not exist, then a new database is returned.
     #[classmethod]
     pub fn read(_cls: &Bound<'_, PyType>, path: String) -> PyResult<Self> {
-        let content = std::fs::read_to_string(Path::new(&path)).map_err(|e| {
-            pyo3::exceptions::PyIOError::new_err(format!("Failed to read file: {e}"))
-        })?;
 
-        serde_json::from_str(&content).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Failed to parse JSON: {e}"))
-        })
+        let path_o = Path::new(&path);
+
+        if path_o.exists(){
+            let content = std::fs::read_to_string(path_o).map_err(|e| {
+                pyo3::exceptions::PyIOError::new_err(format!("Failed to read file: {e}"))
+            })?;
+
+            serde_json::from_str(&content).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Failed to parse JSON: {e}"))
+            })
+        }
+        else {
+            println!("File not found. Initializing an empty database.");
+            let db = Database {
+                template: DatabaseTemplate {
+                    cnodes : BTreeMap::new(),
+                    dnodes : BTreeMap::new()
+                },
+                cnodes: BTreeMap::new(),
+                dnodes: BTreeMap::new()
+            };
+            Ok(db)
+        }
+
     }
 
 
