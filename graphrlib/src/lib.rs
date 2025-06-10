@@ -39,7 +39,7 @@ type IdTemplate = String;
 
 /// Describe Abstract Data and Calculation nodes
 #[pyclass]
-#[derive(Serialize, Deserialize, Default,Clone, Debug)]
+#[derive(Serialize, Deserialize, Default,Clone, Debug,PartialEq, Eq)]
 pub struct DNodeTemplate {
     id: IdDTemplate
 }
@@ -740,9 +740,54 @@ impl Database {
 
         }
 
+        // Merge templates
+        // Go through all the nodes. If the nodes are the same, then overwrite, if the nodes are different, then crash, otherwise merge the two templates in the same fashion as before
+
+        let mut new_template = other.template.clone();
+
+        for (key, value) in self.template.dnodes.iter() {
+            match new_template.dnodes.get(key){
+                Some(v) => {
+                    if v != value {
+                        panic!("Two data nodes are given, but they are different. Templates need to be compatable to merge.");
+                    }; 
+                }
+                None => {new_template.dnodes.insert(key.clone(), value.clone());}
+            }
+        }
+
+
+        for (key, value) in self.template.cnodes.iter() {
+            match new_template.cnodes.get(key){
+                Some(v) => {
+                    if v != value {
+                        panic!("Two data nodes are given, but they are different. Templates need to be compatable to merge.");
+                    }; 
+                }
+                None => {
+                    for dkey in value.incoming.iter() {
+                        if !new_template.dnodes.contains_key(dkey) {
+                            panic!("Data needed for a calculation not found");
+                        }
+                    }
+                    for dkey in value.outcoming.iter() {
+                        if !new_template.dnodes.contains_key(dkey) {
+                            panic!("Data needed for a calculation not found");
+                        }
+                    }
+
+                    new_template.cnodes.insert(key.clone(), value.clone());
+                }
+            }
+            };
+
+
+
+
+
         Database{ cnodes: new_cnodes,
             dnodes: new_dnodes,
-            template: self.template.clone()
+            template: new_template
         }
 
     }
