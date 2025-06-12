@@ -577,7 +577,9 @@ impl Database {
     /// Adds a given Database to the existing one.
     /// Merging is minimal - if nodes can be made the same - they will
     /// nodes are same if 1) they have the same template tag; 2) have the same root nodes
-    pub fn register_pipeline(&self, other: Database) -> Database {
+    /// The database gets modified in place with addition of new nodes
+    /// And the provided database gets returned with some nodes relabeled to match the old database
+    pub fn register_pipeline(&mut self, other: Database) -> Database {
 
         // generate_graphs
         let (this_graph, this_retrieval) = self.generate_digraph();
@@ -782,12 +784,49 @@ impl Database {
             };
 
 
+        // Change self to the merged nodes
+        self.cnodes = new_cnodes.clone();
+        self.dnodes = new_dnodes.clone();
+        self.template = new_template.clone();
+        
+
+        // Create and return the modified database
+        // Just go through the database and if a nodes is found among the other database, add the new one
+        
+        let mut new_cnodes_return :BTreeMap<IdC, CNode> = BTreeMap::new();
+        let mut new_dnodes_return :BTreeMap<IdD, DNode> = BTreeMap::new();
+        
+        
+        for (key2, key1) in data_id_overwrites.iter() {
+            if other.dnodes.contains_key(key2) {
+                new_dnodes_return.insert(key1.clone(), new_dnodes.get(key1).expect("should not fail").clone());
+            }
+        }
+        for (key2, key1) in data_id_overwrites.iter() {
+            if other.cnodes.contains_key(key2) {
+                new_cnodes_return.insert(key1.clone(), new_cnodes.get(key1).expect("should not fail").clone());
+            }
+        }
 
 
+        // for (key, value) in new_dnodes.iter() {
+        //     match data_id_overwrites.get(key) {
+        //         Some(value) => {new_dnodes_return.insert(key.clone(), new_dnodes.get(value).expect("shoud not end here").clone());},
+        //         None => {}
+        //     }
+        // }
 
-        Database{ cnodes: new_cnodes,
-            dnodes: new_dnodes,
-            template: new_template
+        // for (key, value) in new_cnodes.iter() {
+        //     match data_id_overwrites.get(key) {
+        //         Some(value) => {new_cnodes_return.insert(key.clone(), new_cnodes.get(value).expect("shoud not end here").clone());},
+        //         None => {}
+        //     }
+        // }
+
+
+        Database{ cnodes: new_cnodes_return,
+            dnodes: new_dnodes_return,
+            template: new_template.clone()
         }
 
     }
