@@ -793,41 +793,72 @@ impl Database {
         // Create and return the modified database
         // Just go through the database and if a nodes is found among the other database, add the new one
         
-        let mut new_cnodes_return :BTreeMap<IdC, CNode> = BTreeMap::new();
-        let mut new_dnodes_return :BTreeMap<IdD, DNode> = BTreeMap::new();
-        
-        
-        for (key2, key1) in data_id_overwrites.iter() {
-            if other.dnodes.contains_key(key2) {
-                new_dnodes_return.insert(key1.clone(), new_dnodes.get(key1).expect("should not fail").clone());
-            }
-        }
-        for (key2, key1) in data_id_overwrites.iter() {
-            if other.cnodes.contains_key(key2) {
-                new_cnodes_return.insert(key1.clone(), new_cnodes.get(key1).expect("should not fail").clone());
-            }
-        }
-
-
-        // for (key, value) in new_dnodes.iter() {
-        //     match data_id_overwrites.get(key) {
-        //         Some(value) => {new_dnodes_return.insert(key.clone(), new_dnodes.get(value).expect("shoud not end here").clone());},
-        //         None => {}
-        //     }
-        // }
-
-        // for (key, value) in new_cnodes.iter() {
-        //     match data_id_overwrites.get(key) {
-        //         Some(value) => {new_cnodes_return.insert(key.clone(), new_cnodes.get(value).expect("shoud not end here").clone());},
-        //         None => {}
-        //     }
-        // }
-
-
-        Database{ cnodes: new_cnodes_return,
-            dnodes: new_dnodes_return,
+        let mut mutted_other = Database{
+            dnodes: BTreeMap::new(),
+            cnodes: BTreeMap::new(),
             template: new_template.clone()
+        };
+
+
+        for (key, value) in other.dnodes.iter() {
+            match data_id_overwrites.get(key){
+                Some(new_key) =>{
+                    // Data node has been overwritten and I need to get the new one
+                    let new_value = new_dnodes.get(new_key).expect("failed to find a key");
+                    mutted_other.dnodes.insert(new_key.clone(), new_value.clone());
+                }
+                None =>{
+                    // The node has not been overwritten. 
+                    let new_value = new_dnodes.get(key).expect("failed to find a key");
+                    mutted_other.dnodes.insert(key.clone(), new_value.clone());
+                }
+            }
         }
+
+        for (key, value) in other.cnodes.iter() {
+            match data_id_overwrites.get(key){
+                Some(new_key) =>{
+                    // Data node has been overwritten and I need to get the new one
+                    let new_value = new_cnodes.get(new_key).expect("failed to find a key");
+                    mutted_other.cnodes.insert(new_key.clone(), new_value.clone());
+                }
+                None =>{
+                    // The node has not been overwritten. 
+                    let new_value = new_cnodes.get(key).expect("failed to find a key");
+                    mutted_other.cnodes.insert(key.clone(), new_value.clone());
+                }
+            }
+        }
+
+        
+        // Go through all the nodes in the other database
+        // If data_id_overwirte contains the key, then overwrite that node with the renamed one
+        // Otherwise overwrite with the new_node (because some values could have changed.)
+
+        // In case 
+        // for (key1, key2) in data_id_overwrites.iter() {
+        //     // Insert modified node
+        //     if other.dnodes.contains_key(key2) {
+        //         // Delete the old
+        //         changed_other.dnodes.remove(key2);
+        //         //Insert new
+        //         changed_other.dnodes.insert(key1.clone(), new_dnodes.get(key1).expect("should not fail").clone());
+        //     }
+
+
+        // }
+        // for (key1, key2) in data_id_overwrites.iter() {
+        //     if other.cnodes.contains_key(key2) {
+        //         // Delete the old
+        //         changed_other.cnodes.remove(key2);
+        //         //Insert new
+        //         changed_other.cnodes.insert(key1.clone(), new_cnodes.get(key1).expect("should not fail").clone());
+        //     }
+
+        // }
+
+
+        mutted_other
 
     }
 
