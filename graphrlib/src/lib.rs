@@ -747,6 +747,11 @@ impl Database {
 
         let mut new_template = other.template.clone();
 
+        // Commented out because I do not want to change the other template. 
+        // When returning an object it should not change the template (as in calculation I am trying to achieve
+        // a particuaal goal)
+        // Only the self template needs to expand as I might register  new things
+        // The global template is for keeping track of all the calculations.
         for (key, value) in self.template.dnodes.iter() {
             match new_template.dnodes.get(key){
                 Some(v) => {
@@ -763,7 +768,7 @@ impl Database {
             match new_template.cnodes.get(key){
                 Some(v) => {
                     if v != value {
-                        panic!("Two data nodes are given, but they are different. Templates need to be compatable to merge.");
+                        panic!("Two data nodes are given, but they are different. Templates need to be compatable to merge.{:?}; {:?}", v, value);
                     }; 
                 }
                 None => {
@@ -796,7 +801,7 @@ impl Database {
         let mut mutted_other = Database{
             dnodes: BTreeMap::new(),
             cnodes: BTreeMap::new(),
-            template: new_template.clone()
+            template: other.template.clone()
         };
 
 
@@ -950,6 +955,13 @@ impl Database {
         let graph = self.digraph_to_database(&subgraph);
         graph
     }
+
+    // /// Select template history
+    // /// Used for subselecting templates. Allows creating partial workflows.
+    // /// Need to filder the database and the calculations, so that the data in the template match.
+    // pub fn select_template_hisotyr(&self, name:String) -> Database {
+
+    // }
 
     /// Convert to nodes
     pub fn to_nodes(&self) -> Vec<Node> {
@@ -1262,7 +1274,7 @@ impl Database{
 
 
 #[pymodule]
-fn graphrlib_test(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn graphrlib(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Database>()?;
     m.add_class::<DatabaseTemplate>()?;
     Ok(())
