@@ -485,6 +485,15 @@ impl Database {
     }
 
 
+    /// Generate an empty database with the same template
+    fn generate_empty(&self) -> Database{
+
+        Database{
+            dnodes: BTreeMap::new(),
+            cnodes: BTreeMap::new(),
+            template: self.template.clone()
+        }
+    }
 
 
     /// methods to interact with the template object.
