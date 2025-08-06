@@ -142,6 +142,14 @@ impl Node {
         }
     }
 
+    // get all the outcoming nodes if it's a calculation node
+    #[getter]
+    fn outcoming(&self) -> Vec<String> {
+        match self {
+            Node::Calculation(a) => a.outcoming.clone(),
+            Node::Data(a) => panic!("Data nodes do not have outcoming or incoming data assosiated with it. Provide Calculation node.")
+        }
+    }
 
     }
 
