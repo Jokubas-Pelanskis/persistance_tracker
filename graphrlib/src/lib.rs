@@ -635,7 +635,7 @@ pub fn check_against_and_register(&mut self, global_db: &mut Database){
 /// the file is renamed.
 /// There could be cases where a template node does not exist in the global_db (in this case the database is being expanded with new unseen calculations), in that case just take the calculation by given a warning that such template has not been found.
 pub fn check_against(&mut self, global_db: &Database) {
-    // Check template compatibility but don't modify templates
+    // 1. Check template compatibility
     for (key, value) in self.template.dnodes.iter() {
         if let Some(global_value) = global_db.template.dnodes.get(key) {
             if value != global_value {
@@ -655,24 +655,21 @@ pub fn check_against(&mut self, global_db: &Database) {
 
     #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
     enum NodeIdentifier {
-        // For calculation nodes
         Calculation {
             template: String,
             input_ids: BTreeSet<String>,
         },
-        // For leaf data nodes
         LeafData {
             template: String,
             value: String,
         },
-        // For derived data nodes
         DerivedData {
             template: String,
             parent_calc: Box<NodeIdentifier>,
         },
     }
 
-    // Build a map of node identifiers from global database
+    // --- First pass: Merge data nodes (leaf and derived) ---
     let (global_graph, global_retrieval) = global_db.generate_digraph();
     let mut global_identifiers: BTreeMap<NodeIdentifier, String> = BTreeMap::new();
 
@@ -705,33 +702,38 @@ pub fn check_against(&mut self, global_db: &Database) {
                     }
                 }
                 if let Some(parent_calc_id) = parent_calc {
-                    // Recursively build the calculation identifier
                     if let Some(Node::Calculation(calc)) = global_db.get(parent_calc_id.clone()) {
-                        let mut input_ids = BTreeSet::new();
-                        let parent_node_idx = global_retrieval.iter().find(|(_, v)| *v == &parent_calc_id).map(|(k, _)| *k).unwrap();
-                        for parent in global_graph.neighbors_directed(parent_node_idx, Direction::Incoming) {
-                            let parent_id = global_retrieval.get(&parent).unwrap().clone();
-                            if let Some(Node::Data(_)) = global_db.get(parent_id.clone()) {
-                                input_ids.insert(parent_id);
+                        let parent_node_idx_opt = global_retrieval.iter().find(|(_, v)| *v == &parent_calc_id).map(|(k, _)| *k);
+                        if let Some(parent_node_idx) = parent_node_idx_opt {
+                            let mut input_ids = BTreeSet::new();
+                            for parent in global_graph.neighbors_directed(parent_node_idx, Direction::Incoming) {
+                                let parent_id = global_retrieval.get(&parent).unwrap().clone();
+                                if let Some(Node::Data(_)) = global_db.get(parent_id.clone()) {
+                                    input_ids.insert(parent_id);
+                                }
+                            }
+                            let calc_ident = NodeIdentifier::Calculation {
+                                template: calc.template.clone(),
+                                input_ids,
+                            };
+                            NodeIdentifier::DerivedData {
+                                template: data.template.clone(),
+                                parent_calc: Box::new(calc_ident),
+                            }
+                        } else {
+                            // Could not find parent calculation node index, treat as leaf
+                            NodeIdentifier::LeafData {
+                                template: data.template.clone(),
+                                value: data.id.clone(),
                             }
                         }
-                        let calc_ident = NodeIdentifier::Calculation {
-                            template: calc.template.clone(),
-                            input_ids,
-                        };
-                        NodeIdentifier::DerivedData {
-                            template: data.template.clone(),
-                            parent_calc: Box::new(calc_ident),
-                        }
                     } else {
-                        // Should not happen
                         NodeIdentifier::LeafData {
                             template: data.template.clone(),
                             value: data.id.clone(),
                         }
                     }
                 } else {
-                    // Leaf data node
                     NodeIdentifier::LeafData {
                         template: data.template.clone(),
                         value: data.id.clone(),
@@ -743,28 +745,15 @@ pub fn check_against(&mut self, global_db: &Database) {
         global_identifiers.insert(identifier, node_id.clone());
     }
 
-    // Now check our database against the global one and rename matching nodes
     let (self_graph, self_retrieval) = self.generate_digraph();
     let mut rename_map: BTreeMap<String, String> = BTreeMap::new();
 
+    // --- First pass: Data nodes only ---
     for node in self_graph.node_indices() {
         let node_id = self_retrieval.get(&node).unwrap();
         let node_obj = self.get(node_id.clone()).unwrap();
 
         let identifier = match &node_obj {
-            Node::Calculation(calc) => {
-                let mut input_ids = BTreeSet::new();
-                for parent in self_graph.neighbors_directed(node, Direction::Incoming) {
-                    let parent_id = self_retrieval.get(&parent).unwrap().clone();
-                    if let Some(Node::Data(_)) = self.get(parent_id.clone()) {
-                        input_ids.insert(parent_id);
-                    }
-                }
-                NodeIdentifier::Calculation {
-                    template: calc.template.clone(),
-                    input_ids,
-                }
-            }
             Node::Data(data) => {
                 // Find parent calculation
                 let mut parent_calc = None;
@@ -776,23 +765,30 @@ pub fn check_against(&mut self, global_db: &Database) {
                     }
                 }
                 if let Some(parent_calc_id) = parent_calc {
-                    // Recursively build the calculation identifier
                     if let Some(Node::Calculation(calc)) = self.get(parent_calc_id.clone()) {
-                        let mut input_ids = BTreeSet::new();
-                        let parent_node_idx = self_retrieval.iter().find(|(_, v)| *v == &parent_calc_id).map(|(k, _)| *k).unwrap();
-                        for parent in self_graph.neighbors_directed(parent_node_idx, Direction::Incoming) {
-                            let parent_id = self_retrieval.get(&parent).unwrap().clone();
-                            if let Some(Node::Data(_)) = self.get(parent_id.clone()) {
-                                input_ids.insert(parent_id);
+                        let parent_node_idx_opt = self_retrieval.iter().find(|(_, v)| *v == &parent_calc_id).map(|(k, _)| *k);
+                        if let Some(parent_node_idx) = parent_node_idx_opt {
+                            let mut input_ids = BTreeSet::new();
+                            for parent in self_graph.neighbors_directed(parent_node_idx, Direction::Incoming) {
+                                let parent_id = self_retrieval.get(&parent).unwrap().clone();
+                                if let Some(Node::Data(_)) = self.get(parent_id.clone()) {
+                                    input_ids.insert(parent_id);
+                                }
                             }
-                        }
-                        let calc_ident = NodeIdentifier::Calculation {
-                            template: calc.template.clone(),
-                            input_ids,
-                        };
-                        NodeIdentifier::DerivedData {
-                            template: data.template.clone(),
-                            parent_calc: Box::new(calc_ident),
+                            let calc_ident = NodeIdentifier::Calculation {
+                                template: calc.template.clone(),
+                                input_ids,
+                            };
+                            NodeIdentifier::DerivedData {
+                                template: data.template.clone(),
+                                parent_calc: Box::new(calc_ident),
+                            }
+                        } else {
+                            // Could not find parent calculation node index, treat as leaf
+                            NodeIdentifier::LeafData {
+                                template: data.template.clone(),
+                                value: data.id.clone(),
+                            }
                         }
                     } else {
                         NodeIdentifier::LeafData {
@@ -801,16 +797,15 @@ pub fn check_against(&mut self, global_db: &Database) {
                         }
                     }
                 } else {
-                    // Leaf data node
                     NodeIdentifier::LeafData {
                         template: data.template.clone(),
                         value: data.id.clone(),
                     }
                 }
             }
+            _ => continue,
         };
 
-        // Only merge/rename if this node is NOT a root node
         let is_root = self_graph.neighbors_directed(node, Direction::Incoming).next().is_none();
         if !is_root {
             if let Some(global_node_id) = global_identifiers.get(&identifier) {
@@ -822,6 +817,172 @@ pub fn check_against(&mut self, global_db: &Database) {
     }
 
     self.apply_renames(&rename_map);
+
+    // --- Second pass: Calculation nodes, using possibly renamed data node IDs ---
+    let mut renamed_id = |id: &String| -> String {
+        rename_map.get(id).cloned().unwrap_or_else(|| id.clone())
+    };
+
+    let mut calc_rename_map: BTreeMap<String, String> = BTreeMap::new();
+
+    for node in self_graph.node_indices() {
+        let node_id = self_retrieval.get(&node).unwrap();
+        let node_obj = self.get(node_id.clone()).unwrap();
+
+        let identifier = match &node_obj {
+            Node::Calculation(calc) => {
+                let mut input_ids = BTreeSet::new();
+                for parent in self_graph.neighbors_directed(node, Direction::Incoming) {
+                    let parent_id = self_retrieval.get(&parent).unwrap().clone();
+                    if let Some(Node::Data(_)) = self.get(parent_id.clone()) {
+                        input_ids.insert(renamed_id(&parent_id));
+                    }
+                }
+                NodeIdentifier::Calculation {
+                    template: calc.template.clone(),
+                    input_ids,
+                }
+            }
+            _ => continue,
+        };
+
+        let is_root = self_graph.neighbors_directed(node, Direction::Incoming).next().is_none();
+        if !is_root {
+            if let Some(global_node_id) = global_identifiers.get(&identifier) {
+                if node_id != global_node_id {
+                    calc_rename_map.insert(node_id.clone(), global_node_id.clone());
+                }
+            }
+        }
+    }
+
+    self.apply_renames(&calc_rename_map);
+}
+
+
+
+pub fn merge_into(&mut self, global_db: &mut Database) {
+    // 1. Merge templates
+    for (key, value) in self.template.dnodes.iter() {
+        match global_db.template.dnodes.get(key) {
+            Some(global_value) if global_value != value => {
+                panic!("Template mismatch for data node '{}'", key);
+            }
+            None => {
+                global_db.template.dnodes.insert(key.clone(), value.clone());
+            }
+            _ => {}
+        }
+    }
+    for (key, value) in self.template.cnodes.iter() {
+        match global_db.template.cnodes.get(key) {
+            Some(global_value) if global_value != value => {
+                panic!("Template mismatch for calculation node '{}'", key);
+            }
+            None => {
+                global_db.template.cnodes.insert(key.clone(), value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // 2. Merge nodes and build mapping from self IDs to global_db IDs
+    let mut id_map: BTreeMap<String, String> = BTreeMap::new();
+
+    fn merge_node(
+        node_id: &String,
+        self_db: &Database,
+        global_db: &mut Database,
+        id_map: &mut BTreeMap<String, String>,
+    ) -> String {
+        if let Some(mapped) = id_map.get(node_id) {
+            return mapped.clone();
+        }
+        let node = self_db.get(node_id.clone()).unwrap();
+        match node {
+            Node::Data(d) => {
+                // Find parent calculation (if any)
+                let parent_calc_id = self_db.cnodes.values().find(|c| c.outcoming.contains(&d.id)).map(|c| c.id.clone());
+                let global_node_id = if let Some(parent_calc_id) = parent_calc_id {
+                    let global_parent_calc_id = merge_node(&parent_calc_id, self_db, global_db, id_map);
+                    let found = global_db.dnodes.values().find(|dn| {
+                        dn.template == d.template &&
+                        global_db.cnodes.values().any(|c| c.outcoming.contains(&dn.id) && c.id == global_parent_calc_id)
+                    });
+                    if let Some(existing) = found {
+                        existing.id.clone()
+                    } else {
+                        let new_id = d.id.clone();
+                        global_db.dnodes.insert(new_id.clone(), d.clone());
+                        new_id
+                    }
+                } else {
+                    let found = global_db.dnodes.values().find(|dn| dn.template == d.template && dn.id == d.id);
+                    if let Some(existing) = found {
+                        existing.id.clone()
+                    } else {
+                        let new_id = d.id.clone();
+                        global_db.dnodes.insert(new_id.clone(), d.clone());
+                        new_id
+                    }
+                };
+                id_map.insert(node_id.clone(), global_node_id.clone());
+                global_node_id
+            }
+            Node::Calculation(c) => {
+                let mut global_input_ids = Vec::new();
+                for input_id in &c.incoming {
+                    let global_input_id = merge_node(input_id, self_db, global_db, id_map);
+                    global_input_ids.push(global_input_id);
+                }
+                let found = global_db.cnodes.values().find(|cn| {
+                    cn.template == c.template &&
+                    cn.incoming == global_input_ids
+                });
+                let global_calc_id = if let Some(existing) = found {
+                    existing.id.clone()
+                } else {
+                    let mut new_c = c.clone();
+                    new_c.incoming = global_input_ids.clone();
+                    global_db.cnodes.insert(new_c.id.clone(), new_c.clone());
+                    new_c.id.clone()
+                };
+                id_map.insert(node_id.clone(), global_calc_id.clone());
+                global_calc_id
+            }
+        }
+    }
+
+    // Merge all nodes in self into global_db and build id_map
+    let all_node_ids: Vec<String> = self.cnodes.keys().chain(self.dnodes.keys()).cloned().collect();
+    for node_id in all_node_ids {
+        merge_node(&node_id, self, global_db, &mut id_map);
+    }
+
+    // 3. Update all references in self to use canonical global_db IDs
+    // Update calculation node inputs and outputs
+    for c in self.cnodes.values_mut() {
+        c.incoming = c.incoming.iter().map(|id| id_map.get(id).cloned().unwrap_or_else(|| id.clone())).collect();
+        c.outcoming = c.outcoming.iter().map(|id| id_map.get(id).cloned().unwrap_or_else(|| id.clone())).collect();
+    }
+    // Update data node IDs if needed (optional, if you want to fully canonicalize)
+    let mut new_dnodes = BTreeMap::new();
+    for (id, d) in &self.dnodes {
+        let new_id = id_map.get(id).cloned().unwrap_or_else(|| id.clone());
+        let mut new_d = d.clone();
+        new_d.id = new_id.clone();
+        new_dnodes.insert(new_id, new_d);
+    }
+    self.dnodes = new_dnodes;
+    // Update calculation node IDs if needed (optional)
+    let mut new_cnodes = BTreeMap::new();
+    for (id, c) in &self.cnodes {
+        let new_id = id_map.get(id).cloned().unwrap_or_else(|| id.clone());
+        let mut new_c = c.clone();
+        new_c.id = new_id.clone();
+        new_cnodes.insert(new_id, new_c);
+    }
+    self.cnodes = new_cnodes;
 }
 
 
