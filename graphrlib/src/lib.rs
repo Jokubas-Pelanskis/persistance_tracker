@@ -1,9 +1,9 @@
-
 /*
 DNode - Only contains abstract calculations. real data are only described by location 
 
 */
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3::types::PyType;
@@ -590,6 +590,231 @@ impl Database {
 
     }
 
+    /// This is pretty much the same as check agains, but the global database
+    /// gets updated too. If there are new template nodes, then the total template
+    /// gets expanded
+    /// new calculations are also merged
+    pub fn check_against_and_register(&mut self, global_db: &mut Database){
+
+        // Check template compatibility but don't modify templates
+        // Just verify that templates with the same name are identical
+        for (key, value) in self.template.dnodes.iter() {
+            if let Some(global_value) = global_db.template.dnodes.get(key) {
+                if value != global_value {
+                    panic!("Template mismatch for data node '{}': existing and global templates differ", key);
+                }
+            } else {
+                global_db.template.dnodes.insert(key.clone(), value.clone());
+            }
+        }
+
+        for (key, value) in self.template.cnodes.iter() {
+            if let Some(global_value) = global_db.template.cnodes.get(key) {
+                if value != global_value {
+                    panic!("Template mismatch for calculation node '{}': existing and global templates differ", key);
+                }
+            } else {
+                global_db.template.cnodes.insert(key.clone(), value.clone());
+            }
+        }
+
+        // Now check against the global database
+        self.check_against(global_db);
+
+        // Now register all the new nodes in the global database
+        // Go through all the calculation nodes and register them
+        for (key, value) in self.cnodes.iter() {
+            if !global_db.cnodes.contains_key(key) {
+                global_db.cnodes.insert(key.clone(), value.clone());
+            }
+        }
+        // Go through all the data nodes and register them
+        for (key, value) in self.dnodes.iter() {
+            if !global_db.dnodes.contains_key(key) {
+                global_db.dnodes.insert(key.clone(), value.clone());
+            }
+        }
+        
+        // Now we have the global database updated with new nodes    
+        
+
+    }
+/// Given the global database - the method adjusts the self database so that if there are calculations that are the same
+/// (determined from the leaf nodes and the template name), then
+/// the file is renamed.
+/// There could be cases where a template node does not exist in the global_db (in this case the database is being expanded with new unseen calculations), in that case just take the calculation by given a warning that such template has not been found.
+pub fn check_against(&mut self, global_db: &Database){
+
+    // Check template compatibility but don't modify templates
+    // Just verify that templates with the same name are identical
+    for (key, value) in self.template.dnodes.iter() {
+        if let Some(global_value) = global_db.template.dnodes.get(key) {
+            if value != global_value {
+                panic!("Template mismatch for data node '{}': existing and global templates differ", key);
+            }
+        }
+    }
+
+    for (key, value) in self.template.cnodes.iter() {
+        if let Some(global_value) = global_db.template.cnodes.get(key) {
+            if value != global_value {
+                panic!("Template mismatch for calculation node '{}': existing and global templates differ", key);
+            }
+        } else {
+            println!("Warning: Template '{}' not found in global database", key);
+        }
+    }
+
+    // Helper function to find root nodes for a specific node in a graph
+    fn find_roots_from_node(graph: &DiGraph<String, String>, start: NodeIndex) -> HashSet<String> {
+        let mut roots = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut to_visit = VecDeque::new();
+
+        to_visit.push_back(start);
+
+        while let Some(node) = to_visit.pop_front() {
+            if !visited.insert(node) {
+                continue;
+            }
+
+            let parents: Vec<_> = graph.neighbors_directed(node, Direction::Incoming).collect();
+
+            if parents.is_empty() {
+                roots.insert(graph[node].clone());
+            } else {
+                for parent in parents {
+                    to_visit.push_back(parent);
+                }
+            }
+        }
+        roots
+    }
+
+    // Structure to identify equivalent nodes
+    #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    struct NodeIdentifier {
+        template: String,
+        root_node_templates: BTreeSet<String>, // Use template names instead of instance names
+        // Add this field:
+        parent_calc_template: Option<String>, // For data nodes: the template of the calculation that produced it
+    }
+
+    // Build a map of node identifiers from global database
+    let (global_graph, global_retrieval) = global_db.generate_digraph();
+    let mut global_identifiers: BTreeMap<NodeIdentifier, String> = BTreeMap::new();
+
+    for node in global_graph.node_indices() {
+        let node_id = global_retrieval.get(&node).unwrap();
+        let node_obj = global_db.get(node_id.clone()).unwrap();
+
+        let template = match &node_obj {
+            Node::Calculation(value) => value.template.clone(),
+            Node::Data(value) => value.template.clone(),
+        };
+
+        // Find root nodes and map them to their template names
+        let root_instances = find_roots_from_node(&global_graph, node);
+        let mut root_templates = BTreeSet::new();
+        for root_instance in root_instances {
+            if let Some(root_node) = global_db.get(root_instance) {
+                let root_template = match root_node {
+                    Node::Calculation(c) => c.template.clone(),
+                    Node::Data(d) => d.template.clone(),
+                };
+                root_templates.insert(root_template);
+            }
+        }
+
+        // For data nodes, also record the parent calculation template
+        let parent_calc_template = match &node_obj {
+            Node::Data(_) => {
+                // Find the parent calculation node (incoming neighbor)
+                let mut parent_template = None;
+                for parent in global_graph.neighbors_directed(node, Direction::Incoming) {
+                    let parent_id = global_retrieval.get(&parent).unwrap();
+                    if let Some(Node::Calculation(c)) = global_db.get(parent_id.clone()) {
+                        parent_template = Some(c.template.clone());
+                        break;
+                    }
+                }
+                parent_template
+            }
+            _ => None,
+        };
+
+        let identifier = NodeIdentifier {
+            template,
+            root_node_templates: root_templates,
+            parent_calc_template,
+        };
+
+        global_identifiers.insert(identifier, node_id.clone());
+    }
+
+    // Now check our database against the global one and rename matching nodes
+    let (self_graph, self_retrieval) = self.generate_digraph();
+    let mut rename_map: BTreeMap<String, String> = BTreeMap::new();
+
+    for node in self_graph.node_indices() {
+        let node_id = self_retrieval.get(&node).unwrap();
+        let node_obj = self.get(node_id.clone()).unwrap();
+
+        let template = match &node_obj {
+            Node::Calculation(value) => value.template.clone(),
+            Node::Data(value) => value.template.clone(),
+        };
+
+        // Find root nodes and map them to their template names
+        let root_instances = find_roots_from_node(&self_graph, node);
+        let mut root_templates = BTreeSet::new();
+        for root_instance in root_instances {
+            if let Some(root_node) = self.get(root_instance) {
+                let root_template = match root_node {
+                    Node::Calculation(c) => c.template.clone(),
+                    Node::Data(d) => d.template.clone(),
+                };
+                root_templates.insert(root_template);
+            }
+        }
+
+        // For data nodes, also record the parent calculation template
+        let parent_calc_template = match &node_obj {
+            Node::Data(_) => {
+                let mut parent_template = None;
+                for parent in self_graph.neighbors_directed(node, Direction::Incoming) {
+                    let parent_id = self_retrieval.get(&parent).unwrap();
+                    if let Some(Node::Calculation(c)) = self.get(parent_id.clone()) {
+                        parent_template = Some(c.template.clone());
+                        break;
+                    }
+                }
+                parent_template
+            }
+            _ => None,
+        };
+
+        let identifier = NodeIdentifier {
+            template,
+            root_node_templates: root_templates,
+            parent_calc_template,
+        };
+
+        // Check if this identifier exists in global database
+        if let Some(global_node_id) = global_identifiers.get(&identifier) {
+            // Found a matching node, so we should rename our node to match the global one
+            if node_id != global_node_id {
+                rename_map.insert(node_id.clone(), global_node_id.clone());
+            }
+        }
+    }
+
+    // Apply the renames to our database
+    self.apply_renames(&rename_map);
+}
+
+
+
 
     /// Adds a given Database to the existing one.
     /// Merging is minimal - if nodes can be made the same - they will
@@ -923,39 +1148,6 @@ impl Database {
         // This dictionary can be generated by using the selection functions and the database.
 
         // Check the inputs
-        // Check if all DNode ids exist in the database. If not ask to register them separately
-
-        // Check if provided template names exist, if not ask to register template.
-
-        // Change the template
-        let new_cnode_tem = self.template.create_calculation_node(calculation_name.clone(), new_command);
-        // Insert that into the new dataabase
-        self.template.cnodes.insert(calculation_name.clone(), new_cnode_tem.clone());
-        
-
-        // Fix the database retrospectively
-        for (cnode_id, dnode_mapping) in database_correction.iter() {
-
-            // Create a mapping to map template to actual implementation
-            let map_with_error = |k: &String| {
-                dnode_mapping.get(k).cloned().unwrap_or_else(|| {
-                    panic!("Failed to find '{}' in input mappings. Aborting.", k);
-                })
-            };
-
-
-            // Create a new calculation node
-            let new_cnode = CNode{
-                id : cnode_id.clone(),
-                template : calculation_name.clone(),
-                incoming : new_cnode_tem.incoming.iter().map(map_with_error).collect(),
-                outcoming : new_cnode_tem.outcoming.iter().map(map_with_error).collect(),
-            };
-
-            // assign that calcluation node to the old one
-            self.cnodes.insert(cnode_id.clone(), new_cnode);
-        }
-
 
     }
 
@@ -1131,7 +1323,48 @@ impl Database{
 
     }
 
+    /// Helper method to apply renames to the database
+    fn apply_renames(&mut self, rename_map: &BTreeMap<String, String>) {
+        // Create new maps for renamed nodes
+        let mut new_cnodes = BTreeMap::new();
+        let mut new_dnodes = BTreeMap::new();
 
+        // Rename calculation nodes
+        for (old_id, cnode) in self.cnodes.iter() {
+            let new_id = rename_map.get(old_id).unwrap_or(old_id);
+            
+            let mut new_cnode = cnode.clone();
+            new_cnode.id = new_id.clone();
+            
+            // Update incoming and outgoing references
+            for incoming_ref in &mut new_cnode.incoming {
+                if let Some(new_ref) = rename_map.get(incoming_ref) {
+                    *incoming_ref = new_ref.clone();
+                }
+            }
+            for outgoing_ref in &mut new_cnode.outcoming {
+                if let Some(new_ref) = rename_map.get(outgoing_ref) {
+                    *outgoing_ref = new_ref.clone();
+                }
+            }
+            
+            new_cnodes.insert(new_id.clone(), new_cnode);
+        }
+
+        // Rename data nodes
+        for (old_id, dnode) in self.dnodes.iter() {
+            let new_id = rename_map.get(old_id).unwrap_or(old_id);
+            
+            let mut new_dnode = dnode.clone();
+            new_dnode.id = new_id.clone();
+            
+            new_dnodes.insert(new_id.clone(), new_dnode);
+        }
+
+        // Replace the old maps with the new ones
+        self.cnodes = new_cnodes;
+        self.dnodes = new_dnodes;
+    }
     pub fn digraph_to_database(&self, graph: &DiGraph<String, ()>) -> Database {
 
         let mut cnodes: BTreeMap<String, CNode> = BTreeMap::new();
