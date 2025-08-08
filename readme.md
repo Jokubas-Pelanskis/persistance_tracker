@@ -16,8 +16,17 @@ f2 = db1.template_register_dnode("f2")
 f3 = db1.template_register_dnode("f3")
 f4 = db1.template_register_dnode("f4")
 
-p1 = db1.template_register_cnode("p1",f"this input({f1}) output({f2})")
-p2 = db1.template_register_cnode("p2",f"that input({f2}) input({f3}) output({f4})")
+p1 = db1.template_register_cnode(
+    "p1",
+    f"this input({f1}) output({f2})",
+    extra = {}
+    )
+# This calculation passes another argument as a parameter
+p2 = db1.template_register_cnode(
+    "p2",
+    f"that -n extra(cores) input({f2}) input({f3}) output({f4})",
+    extra = {"cores": 20}
+    )
 
 
 
@@ -83,6 +92,13 @@ print("global_db")
 display(Source(global_db.template_as_dot()))
 display(Source(global_db.as_dot()))
 
+# ---------
+# Running the calculatiosn
+
+from worklfow_helpers.run import run_snakemake
+
+# Run everything as snakemake
+run_snakemake(global_db.to_snakemake())
 
 # -----------------------------------------------------------
 # Now find all calculations from the global db that foll under p2
@@ -96,5 +112,8 @@ for p2 in global_db.select_similar("f3"):
     for c in global_db.select_future(p2.id).select_similar("p2xx"):
         print(c.id)
         
-    
+# Examples of other fnuctions
+db.get_command(db.select_similar("p1")[0].id, "data")
+
+
 ```

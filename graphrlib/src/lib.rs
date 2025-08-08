@@ -1428,6 +1428,38 @@ pub fn merge_into(&mut self, global_db: &mut Database) {
             full_command = full_command.replace(&format!("$o_{}", o), &format!("{}/{}",root_folder,o_id));
         }
 
+        // Replace all instances with extra(key) with key, where key is extracted from the node or template. If value is not found, then panic
+        let mut replaced_keys = std::collections::HashSet::new();
+        for (key, _) in &template_cnode.extra {
+            let value = if let Some(val) = cnode.extra.get(key) {
+                val
+            } else if let Some(val) = template_cnode.extra.get(key) {
+                val
+            } else {
+                panic!("Extra value for key '{}' not found in node or template!", key);
+            };
+            let value_str = match value {
+                ExtraData::Int(i) => i.to_string(),
+                ExtraData::String(s) => s.clone(),
+                ExtraData::Bool(b) => b.to_string(),
+            };
+            full_command = full_command.replace(&format!("extra({})", key), &value_str);
+            replaced_keys.insert(key.clone());
+        }
+        // Also handle any extra keys that are only in the instance node (not in the template)
+        for (key, value) in &cnode.extra {
+            if replaced_keys.contains(key) {
+                continue;
+            }
+            let value_str = match value {
+                ExtraData::Int(i) => i.to_string(),
+                ExtraData::String(s) => s.clone(),
+                ExtraData::Bool(b) => b.to_string(),
+            };
+            full_command = full_command.replace(&format!("extra({})", key), &value_str);
+        }
+
+
         full_command
 
     }
@@ -1746,6 +1778,38 @@ impl Database{
         new_graph.reverse();
         new_graph
     }
+
+    /// Get extra information about a comutational node
+    /// Check if it exists under the node itself
+    /// if not then check if it exists in the template
+    fn get_extra(&self, node_id: &str, key: &str) -> Option<String> {
+        // Check if the node exists in the cnodes
+        if let Some(cnode) = self.cnodes.get(node_id) {
+            if let Some(value) = cnode.extra.get(key) {
+                return Some(match value {
+                    ExtraData::Int(i) => i.to_string(),
+                    ExtraData::String(s) => s.clone(),
+                    ExtraData::Bool(b) => b.to_string(),
+                });
+            }
+        }
+        
+        // If not found in node, check in the template
+        if let Some(template_cnode) = self.template.cnodes.get(node_id) {
+            if let Some(value) = template_cnode.extra.get(key) {
+                return Some(match value {
+                    ExtraData::Int(i) => i.to_string(),
+                    ExtraData::String(s) => s.clone(),
+                    ExtraData::Bool(b) => b.to_string(),
+                });
+            }
+        }
+        
+        // If not found anywhere, return None
+        None
+    }
+
+
 
 }
 
