@@ -511,7 +511,7 @@ impl Database {
 
     /// Register a new calculation
     /// If a calculation already exists, then update the whole database with the new command.
-    fn template_register_cnode(&mut self, name:String, command : String ) -> CNodeTemplate{
+    fn template_register_cnode(&mut self, name:String, command : String) -> CNodeTemplate{
 
         /// Check if the node has chaned of been overwritten
         let node_id = match self.template.cnodes.get(&name) {
@@ -984,6 +984,22 @@ pub fn merge_into(&mut self, global_db: &mut Database) {
     }
     self.cnodes = new_cnodes;
 }
+
+
+    pub fn to_snakemake(&self) -> String {
+        let mut result = String::new();
+        for (id, node) in &self.cnodes {
+            let inputs: Vec<String> = node.incoming.iter().map(|i| format!("directory({}/{})","data".to_string(), i)).collect();
+            let outputs: Vec<String> = node.outcoming.iter().map(|o| format!("directory({}/{})", "data".to_string(), o)).collect();
+
+            let command_string = self.get_command(id.clone(), "data".to_string());
+
+            let command = format!("rule {}:\n    input: {}\n    output: {}\n    shell: '{}'\n",
+                                  id, inputs.join(", "), outputs.join(", "), command_string);
+            result.push_str(&command);
+        }
+        result
+    }
 
 
     /// Adds a given Database to the existing one.
