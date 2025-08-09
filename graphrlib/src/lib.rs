@@ -1032,13 +1032,29 @@ pub fn merge_into(&mut self, global_db: &mut Database) {
     pub fn to_snakemake(&self) -> String {
         let mut result = String::new();
         for (id, node) in &self.cnodes {
-            let inputs: Vec<String> = node.incoming.iter().map(|i| format!("directory({}/{})","data".to_string(), i)).collect();
-            let outputs: Vec<String> = node.outcoming.iter().map(|o| format!("directory({}/{})", "data".to_string(), o)).collect();
+            let inputs: Vec<String> = node.incoming.iter().map(|i| format!("'{}/{}'","data".to_string(), i)).collect();
+            let outputs: Vec<String> = node.outcoming.iter().map(|o| format!("directory('{}/{}')", "data".to_string(), o)).collect();
 
             let command_string = self.get_command(id.clone(), "data".to_string());
 
-            let command = format!("rule {}:\n    input: {}\n    output: {}\n    shell: '{}'\n",
-                                  id, inputs.join(", "), outputs.join(", "), command_string);
+
+            
+            
+            let mut command = format!("rule r{}:\n    input: {}\n    output: {}\n",
+            id, inputs.join(", "), outputs.join(", "));
+            
+            // try getting resources.
+            // if cores are provided, then generate a string
+
+            let resources = self.get_extra(&id.clone(), "cores");
+            
+            if let Some(ExtraData::Int(cores)) = resources {
+                command.push_str(&format!("    resources: cores={}\n", cores));
+            }
+
+            // Add shell command
+            command.push_str(&format!("    shell:\n        '{}'\n", command_string));
+                                  
             result.push_str(&command);
         }
         result
@@ -1782,30 +1798,25 @@ impl Database{
     /// Get extra information about a comutational node
     /// Check if it exists under the node itself
     /// if not then check if it exists in the template
-    fn get_extra(&self, node_id: &str, key: &str) -> Option<String> {
-        // Check if the node exists in the cnodes
+    fn get_extra(&self, node_id: &str, key: &str) -> Option<ExtraData> {
+        // First, check if the node exists in cnodes
         if let Some(cnode) = self.cnodes.get(node_id) {
             if let Some(value) = cnode.extra.get(key) {
-                return Some(match value {
-                    ExtraData::Int(i) => i.to_string(),
-                    ExtraData::String(s) => s.clone(),
-                    ExtraData::Bool(b) => b.to_string(),
-                });
+                return Some(value.clone());
             }
-        }
-        
-        // If not found in node, check in the template
-        if let Some(template_cnode) = self.template.cnodes.get(node_id) {
+            // If not found in the instance, check the template using the template name
+            if let Some(template_cnode) = self.template.cnodes.get(&cnode.template) {
+                if let Some(value) = template_cnode.extra.get(key) {
+                    return Some(value.clone());
+                }
+            }
+        } else if let Some(template_cnode) = self.template.cnodes.get(node_id) {
+            // If node_id is actually a template node id
             if let Some(value) = template_cnode.extra.get(key) {
-                return Some(match value {
-                    ExtraData::Int(i) => i.to_string(),
-                    ExtraData::String(s) => s.clone(),
-                    ExtraData::Bool(b) => b.to_string(),
-                });
+                return Some(value.clone());
             }
         }
-        
-        // If not found anywhere, return None
+        // Not found
         None
     }
 
