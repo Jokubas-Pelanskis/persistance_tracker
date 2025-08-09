@@ -480,6 +480,8 @@ impl DatabaseTemplate {
         .collect()
 }
 
+
+
 }
 
 
@@ -1031,6 +1033,21 @@ pub fn merge_into(&mut self, global_db: &mut Database) {
 
     pub fn to_snakemake(&self) -> String {
         let mut result = String::new();
+
+        // generate all rule that specfies all the things to be calculated. (end nodes for the datbaase)
+        let leaf_nodes = self.find_leaf_nodes();
+
+        result.push_str("rule all:\n    input:");
+        for leaf in leaf_nodes {
+            let leaf_id = match self.get(leaf) {
+                Some(Node::Data(d)) => d.id.clone(),
+                _ => panic!("Leaf node is not a Data node"),
+            };
+            result.push_str(&format!(" 'data/{}',", leaf_id));
+        }
+        result.push_str("\n\n");
+
+        // generate all dependencies
         for (id, node) in &self.cnodes {
             let inputs: Vec<String> = node.incoming.iter().map(|i| format!("'{}/{}'","data".to_string(), i)).collect();
             let outputs: Vec<String> = node.outcoming.iter().map(|o| format!("directory('{}/{}')", "data".to_string(), o)).collect();
@@ -1420,6 +1437,19 @@ pub fn merge_into(&mut self, global_db: &mut Database) {
     /// Convert to nodes
     pub fn to_nodes(&self) -> Vec<Node> {
         unimplemented!();
+    }
+
+
+    /// Find all leaf nodes (final nodes that do not feed into any other calculation)
+    fn find_leaf_nodes(&self) -> HashSet<IdNodeTemplate> {
+
+        let (graph, mappings) = self.generate_digraph();
+
+        graph
+        .node_indices()
+        .filter(|&node| graph.neighbors_directed(node, Direction::Outgoing).next().is_none())
+        .filter_map(|node_id| mappings.get(&node_id).cloned())  // get and clone the IdNodeTemplate
+        .collect()
     }
 
     /// generate the full command to run.
