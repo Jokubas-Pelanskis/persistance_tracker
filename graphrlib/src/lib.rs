@@ -1432,21 +1432,52 @@ pub fn select_template_history(&self, template_name: String) -> Database {
     }
 }
 
+
     pub fn to_snakemake(&self) -> String {
         let mut result = String::new();
+
+        // generate all rule that specfies all the things to be calculated. (end nodes for the datbaase)
+        let leaf_nodes = self.find_leaf_nodes();
+
+        result.push_str("rule all:\n    input:");
+        for leaf in leaf_nodes {
+            let leaf_id = match self.get(leaf) {
+                Some(Node::Data(d)) => d.id.clone(),
+                _ => panic!("Leaf node is not a Data node"),
+            };
+            result.push_str(&format!(" 'data/{}',", leaf_id));
+        }
+        result.push_str("\n\n");
+
+        // generate all dependencies
         for (id, node) in &self.cnodes {
-            let inputs: Vec<String> = node.incoming.iter().map(|i| format!("directory({}/{})","data".to_string(), i)).collect();
-            let outputs: Vec<String> = node.outcoming.iter().map(|o| format!("directory({}/{})", "data".to_string(), o)).collect();
+            let inputs: Vec<String> = node.incoming.iter().map(|i| format!("'{}/{}'","data".to_string(), i)).collect();
+            let outputs: Vec<String> = node.outcoming.iter().map(|o| format!("directory('{}/{}')", "data".to_string(), o)).collect();
 
             let command_string = self.get_command(id.clone(), "data".to_string());
 
-            let command = format!("rule {}:\n    input: {}\n    output: {}\n    shell: '{}'\n",
-                                  id, inputs.join(", "), outputs.join(", "), command_string);
+
+            
+            
+            let mut command = format!("rule r{}:\n    input: {}\n    output: {}\n",
+            id, inputs.join(", "), outputs.join(", "));
+            
+            // try getting resources.
+            // if cores are provided, then generate a string
+
+            let resources = self.get_extra(&id.clone(), "cores");
+            
+            if let Some(ExtraData::Int(cores)) = resources {
+                command.push_str(&format!("    resources: cores={}\n", cores));
+            }
+
+            // Add shell command
+            command.push_str(&format!("    shell:\n        '{}'\n", command_string));
+                                  
             result.push_str(&command);
         }
         result
     }
-
 
 
     /// Convert to nodes
