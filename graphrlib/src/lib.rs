@@ -5,6 +5,7 @@ DNode - Only contains abstract calculations. real data are only described by loc
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use pyo3::prelude::*;
+use pyo3::types::*;
 use pyo3::wrap_pyfunction;
 use pyo3::types::PyType;
 use serde::{Serialize, Deserialize};
@@ -22,6 +23,7 @@ use petgraph::dot::{Dot, Config};
 use petgraph::algo::has_path_connecting;
 use petgraph::visit::Topo;
 use petgraph::visit::Walker;
+use pyo3::types::PyDict;
 
 
 
@@ -51,7 +53,8 @@ pub struct CNodeTemplate {
     pub id: IdCTemplate,
     pub command: String,
     pub incoming: Vec<IdDTemplate>,
-    pub outcoming: Vec<IdDTemplate>
+    pub outcoming: Vec<IdDTemplate>,
+    pub extra: BTreeMap<String, ExtraData> // Extra data that can be passed to the node
 }
 
 #[pyclass]
@@ -108,7 +111,9 @@ pub struct CNode{
     #[pyo3(get)]
     pub incoming: Vec<IdD>,
     #[pyo3(get)]
-    pub outcoming: Vec<IdD>
+    pub outcoming: Vec<IdD>,
+    #[pyo3(get)]
+    pub extra: BTreeMap<String, ExtraData> // Extra data that can be passed to the node
 }
 
 #[pyclass]
@@ -117,6 +122,19 @@ enum Node {
     Calculation(CNode),
     Data(DNode),
 }
+
+
+/// Extra data that can be passed to templates or nodes
+/// This data can be used to modify the behaviour and if anything extra needs to be attached
+/// First value is looked up in the instance and if not found then the default value from the template is used.
+#[pyclass]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+enum ExtraData {
+    Int(i32),
+    String(String),
+    Bool(bool),
+}
+
 
 
 #[pymethods]
@@ -280,6 +298,7 @@ impl DatabaseTemplate {
             incoming: values.1,
             outcoming: values.2,
             command: values.0,
+            extra: BTreeMap::new(), // Extra data that can be passed to the node
         };
         cnode
     }
@@ -370,6 +389,7 @@ impl DatabaseTemplate {
                 template: value.id.clone(),
                 incoming: value.incoming.iter().map(map_with_error).collect(),
                 outcoming: value.outcoming.iter().map(map_with_error).collect(),
+                extra: BTreeMap::new(), // Create empty
             };
         
             new_cnodes.insert(cid.clone(), cnode);
@@ -571,26 +591,49 @@ impl Database {
 
     /// Register a new calculation
     /// If a calculation already exists, then update the whole database with the new command.
-    fn template_register_cnode(&mut self, name:String, command : String) -> CNodeTemplate{
+    /// Add extra information from python that is a dictionary
 
-        /// Check if the node has chaned of been overwritten
-        let node_id = match self.template.cnodes.get(&name) {
+    fn template_register_cnode(
+        &mut self,
+        name: String,
+        command: String,
+        extra: Option<&Bound<'_, PyDict>>,
+    ) -> CNodeTemplate {
+        // Parse the command and create the node
+        let mut new_node = self.template.create_calculation_node(name.clone(), command);
+
+        // If extra is provided from Python, convert it to BTreeMap<String, ExtraData>
+        if let Some(py_dict) = extra {
+            let mut extra_map = BTreeMap::new();
+            for (k, v) in py_dict.iter() {
+                let key: String = k.extract().unwrap();
+                let value = if let Ok(i) = v.extract::<i32>() {
+                    ExtraData::Int(i)
+                } else if let Ok(s) = v.extract::<String>() {
+                    ExtraData::String(s)
+                } else if let Ok(b) = v.extract::<bool>() {
+                    ExtraData::Bool(b)
+                } else {
+                    panic!("Unsupported type for extra data");
+                };
+                extra_map.insert(key, value);
+            }
+            new_node.extra = extra_map;
+        }
+
+        // Check if the node already exists and is compatible
+        match self.template.cnodes.get(&name) {
             Some(old_node) => {
-                let new_node = self.template.create_calculation_node(name, command);
-                
                 if new_node != *old_node {
-                    panic!("A same node in the template has been found! The new node is different. If you want to overwrite the node use explicit mechanism of seach for nodes manually overwrit.");
-
+                    panic!("A same node in the template has been found! The new node is different. If you want to overwrite the node use explicit mechanism of search for nodes and manually overwrite.");
                 }
-
                 new_node
-            },
-            None => {self.template.register_cnode(name, command)}
-
-        };
-
-        node_id
-        
+            }
+            None => {
+                self.template.cnodes.insert(name.clone(), new_node.clone());
+                new_node
+            }
+        }
     }
 
     fn template_as_dot(&self) -> String {
@@ -1486,6 +1529,18 @@ pub fn select_template_history(&self, template_name: String) -> Database {
     }
 
 
+    /// Find all leaf nodes (final nodes that do not feed into any other calculation)
+    fn find_leaf_nodes(&self) -> HashSet<IdNodeTemplate> {
+
+        let (graph, mappings) = self.generate_digraph();
+
+        graph
+        .node_indices()
+        .filter(|&node| graph.neighbors_directed(node, Direction::Outgoing).next().is_none())
+        .filter_map(|node_id| mappings.get(&node_id).cloned())  // get and clone the IdNodeTemplate
+        .collect()
+    }
+
     /// generate the full command to run.
     /// root_folder - prepend a string to all commands.
     fn get_command(&self,cnode_id: String, root_folder: String) -> String {
@@ -1507,6 +1562,38 @@ pub fn select_template_history(&self, template_name: String) -> Database {
         for (o, o_id) in cnode.outcoming.iter().enumerate() {
             full_command = full_command.replace(&format!("$o_{}", o), &format!("{}/{}",root_folder,o_id));
         }
+
+        // Replace all instances with extra(key) with key, where key is extracted from the node or template. If value is not found, then panic
+        let mut replaced_keys = std::collections::HashSet::new();
+        for (key, _) in &template_cnode.extra {
+            let value = if let Some(val) = cnode.extra.get(key) {
+                val
+            } else if let Some(val) = template_cnode.extra.get(key) {
+                val
+            } else {
+                panic!("Extra value for key '{}' not found in node or template!", key);
+            };
+            let value_str = match value {
+                ExtraData::Int(i) => i.to_string(),
+                ExtraData::String(s) => s.clone(),
+                ExtraData::Bool(b) => b.to_string(),
+            };
+            full_command = full_command.replace(&format!("extra({})", key), &value_str);
+            replaced_keys.insert(key.clone());
+        }
+        // Also handle any extra keys that are only in the instance node (not in the template)
+        for (key, value) in &cnode.extra {
+            if replaced_keys.contains(key) {
+                continue;
+            }
+            let value_str = match value {
+                ExtraData::Int(i) => i.to_string(),
+                ExtraData::String(s) => s.clone(),
+                ExtraData::Bool(b) => b.to_string(),
+            };
+            full_command = full_command.replace(&format!("extra({})", key), &value_str);
+        }
+
 
         full_command
 
@@ -1827,6 +1914,32 @@ impl Database{
         new_graph.reverse();
         new_graph
     }
+
+    /// Get extra information about a comutational node
+    /// Check if it exists under the node itself
+    /// if not then check if it exists in the template
+    fn get_extra(&self, node_id: &str, key: &str) -> Option<ExtraData> {
+        // First, check if the node exists in cnodes
+        if let Some(cnode) = self.cnodes.get(node_id) {
+            if let Some(value) = cnode.extra.get(key) {
+                return Some(value.clone());
+            }
+            // If not found in the instance, check the template using the template name
+            if let Some(template_cnode) = self.template.cnodes.get(&cnode.template) {
+                if let Some(value) = template_cnode.extra.get(key) {
+                    return Some(value.clone());
+                }
+            }
+        } else if let Some(template_cnode) = self.template.cnodes.get(node_id) {
+            // If node_id is actually a template node id
+            if let Some(value) = template_cnode.extra.get(key) {
+                return Some(value.clone());
+            }
+        }
+        // Not found
+        None
+    }
+
 
 
 }
