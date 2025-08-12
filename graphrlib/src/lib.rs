@@ -689,6 +689,20 @@ impl Database {
             }
         }
 
+        // Sort the names
+
+        filtered_names.sort_by(|a, b| {
+            let a_name = match a {
+                Node::Calculation(c) => &c.id,
+                Node::Data(d) => &d.id,
+            };
+            let b_name = match b {
+                Node::Calculation(c) => &c.id,
+                Node::Data(d) => &d.id,
+            };
+            a_name.cmp(b_name)
+        });
+
         filtered_names
 
     }
@@ -1543,6 +1557,9 @@ pub fn select_template_history(&self, template_name: String) -> Database {
 
     /// generate the full command to run.
     /// root_folder - prepend a string to all commands.
+    /// NOTE: I could have a method under CNode, but generation of command requires knowladge of 
+    /// template, which can only be fully reached via the database, therefore it requires to know database - therefore it has to be a method under the databse.
+    /// (This could be changed tho.)
     fn get_command(&self,cnode_id: String, root_folder: String) -> String {
 
         // Go through all inputs and outputs and replace them with appropriate inputs
