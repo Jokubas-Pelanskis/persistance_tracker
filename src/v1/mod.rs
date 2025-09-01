@@ -1962,11 +1962,9 @@ impl Database{
 }
 
 
-
-
-#[pymodule]
-fn graphrlib(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn create_submodule(py: Python) -> PyResult<Py<PyModule>> {
+    let m = PyModule::new(py, "v1")?;
     m.add_class::<Database>()?;
     m.add_class::<DatabaseTemplate>()?;
-    Ok(())
+    Ok(m.into())  // return a Py<PyModule>
 }
