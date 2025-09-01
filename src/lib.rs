@@ -1,4 +1,6 @@
 mod v1;
+mod v2;
+
 use pyo3::prelude::*;
 
 #[pymodule]
