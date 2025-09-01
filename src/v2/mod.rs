@@ -1,5 +1,59 @@
 /*
-DNode - Only contains abstract calculations. real data are only described by location 
+Optios for the implementation
+1) precalculate all subgraphs and store them in the database. Then the query will be really fast.
+2) store as linked list and then recursively search. (searching could be slow)
+2.1) In each iteration go to disk and read the information you want. This could be very slow in tranversing the list.
+2.2) load the whole database into memory and then do the search. Could become problematic if the database is very large.
+What will I be searching for
+1) all the previous nodes - to determine the name of the node and in searching data analyis step (what was the input for this figure) (I want this to be very fast.)
+2) all nodes that fall under the same template name.
+What are other relevant constraits to make the decision?
+1) I do not expect really deep graphs (transversal list would not be that deep) and they will not be deeply connected. This 
+This favours option1.
+
+In this variant implement a sql database where each connection is already precomputed.
+
+SQL database schema:
+
+table template_calculation_nodes
+    id INTEGER
+    name TEXT - name of the template calculation node
+
+table template_data_nodes
+    id INTEGER
+    name TEXT - name of the template calculation node
+    command TEXT - command name (general expression that has to be parsed to generate the actual command name)
+
+table template_edges (NOTE: this will only store inptus and outputs, not the full graph)
+    calculation_id: INTEGER - name of the template calculation node
+    parameter_name: TEXT - name of the input/output
+    parameter_value: INTEGER - id of a template_data_node
+
+table calcualtion_nodes
+    id INTEGER
+    name TEXT - name of the node. Hash under which the calculation will be stored
+    template_name TEXT
+    command TEXT - full command that should be run.
+
+table data_nodes
+    id INTEGER
+    name TEXT
+
+table edges (NOTE: essentially this stores a dense graph of all inputs and ouputs.)
+    source_id INTEGER- name of the node I am inspecting
+    target_id INTEGER - name of the node that the anchor has as history 
+
+table extra_calculation_parameters
+    id INTEGER
+    calculation_id INTEGER - id of the calculation
+    extra_name TEXT - name of the extra parameter
+    extra_value TEXT - value of the extra parameter (could be int or float or anything.)
+
+Question: do I really need to write my database? Everytime I reconstruct the database form the input files (do that to check for changes and if there are
+new calculations). Saving it before was improtant because file namimng was not determenistic; now with this scheme, where node name is determined from root
+and all previous calculations - is deterministing; Therefore, for such purpose I do not need to save anything. However. I might want to load the database in 
+some other contexts (such as in a script when looking for a neighbour or when running an optimisation algorithm.) Also, I might want to save a bunch of databases
+from multiple places - in that case i might want to have on disk storge and not in memory one.
 
 */
 use std::collections::BTreeMap;
@@ -28,6 +82,12 @@ use pyo3::types::PyDict;
 
 
 
+/// defines a single node
+struct Node {
+
+}
+
+/// defines the main structure that stores all the information
 pub struct Database {
 
 }
@@ -83,12 +143,15 @@ impl Database{
     /// relevant information: 1) all root node names (node name are unique); 2) calculation names*
     /// * there could be cases where a->c1->b and a->c2->b. Different calculation but produce or connect same type of data.
     /// For example, such cases occur when I slighly modify the calculation (say change the optimisation algorithm or other feature that does not change the output data format or logic) 
-    fn calculate_node_name(&self) -> {}
+    fn calculate_node_name(&self, description: ???) -> {}
+
+
 
 
     
 
 }
+
 
 
 
