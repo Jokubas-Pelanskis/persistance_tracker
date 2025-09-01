@@ -1960,11 +1960,3 @@ impl Database{
 
 
 }
-
-
-pub fn create_submodule(py: Python) -> PyResult<Py<PyModule>> {
-    let m = PyModule::new(py, "v1")?;
-    m.add_class::<Database>()?;
-    m.add_class::<DatabaseTemplate>()?;
-    Ok(m.into())  // return a Py<PyModule>
-}
