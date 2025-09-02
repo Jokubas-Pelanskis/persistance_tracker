@@ -55,6 +55,12 @@ and all previous calculations - is deterministing; Therefore, for such purpose I
 some other contexts (such as in a script when looking for a neighbour or when running an optimisation algorithm.) Also, I might want to save a bunch of databases
 from multiple places - in that case i might want to have on disk storge and not in memory one.
 
+To fully determine the whole database i need 1) template; 2) root nodes. Because I am using determenistic derivation of derived nodes, all other values can be calculated
+
+For a given derived node I might want to know:
+1) What nodes go before after (find future and history)
+
+
 */
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
