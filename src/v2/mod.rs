@@ -12,6 +12,8 @@ What are other relevant constraits to make the decision?
 This favours option1.
 
 In this variant implement a sql database where each connection is already precomputed.
+All data is stored in a sql database and not on disk. Everytime, you want something, just query the database.
+
 
 SQL database schema:
 
@@ -49,6 +51,17 @@ table extra_calculation_parameters
     extra_name TEXT - name of the extra parameter
     extra_value TEXT - value of the extra parameter (could be int or float or anything.)
 
+table sessions
+    id INTEGER
+    session_time TIME
+    node_name INTEGER # value from external table for calculation or data node
+
+table template_sessions
+    id INTEGER
+    node_name INTEGER # which template belogs to the template.
+
+
+
 Question: do I really need to write my database? Everytime I reconstruct the database form the input files (do that to check for changes and if there are
 new calculations). Saving it before was improtant because file namimng was not determenistic; now with this scheme, where node name is determined from root
 and all previous calculations - is deterministing; Therefore, for such purpose I do not need to save anything. However. I might want to load the database in 
@@ -59,6 +72,14 @@ To fully determine the whole database i need 1) template; 2) root nodes. Because
 
 For a given derived node I might want to know:
 1) What nodes go before after (find future and history)
+
+
+The main idea:
+Maybe I need another table that tracks sessions and  specific calculations. Most of the time, I want to run a 
+
+
+
+
 
 
 */
@@ -85,13 +106,6 @@ use petgraph::visit::Topo;
 use petgraph::visit::Walker;
 use pyo3::types::PyDict;
 
-
-
-
-/// defines a single node
-struct Node {
-
-}
 
 /// defines the main structure that stores all the information
 pub struct Database {
@@ -123,20 +137,25 @@ impl Database {
     /// For a given node it selecets all nodes that come in and go out
     pub fn select_branch(&self) -> Database {}
 
+    /// produce a table of values.
+    /// each row is a single pipeline a->b->c
+    pub fn query(&self)  -> Vec<Vec<str>>{
+
+    }
+
     /// Returns only a fraction of the database (template and nodes)
     /// that correspond to the history of the given template node id
     pub fn template_select_history(&self) -> Database {}
 
+    /// register template node
+    pub fn template_register_dnode(&mut self){}
+    
+    /// register template node
+    pub fn template_register_cnode(&mut self) {}
+    
     /// Create a new calculation for a given node
     /// template corresponding to self node are created. (the calculation is small)
     pub fn create_calculation(&self) -> Database {}
-
-    /// register template node
-    pub fn template_register_dnode(&mut self){}
-
-    /// register template node
-    pub fn template_register_cnode(&mut self) {}
-
 
 }
 
