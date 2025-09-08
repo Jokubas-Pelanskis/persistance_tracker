@@ -125,9 +125,10 @@ def _init_db(conn: sqlite3.Connection):
     c.executescript("""
     CREATE TABLE IF NOT EXISTS template_nodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE,
-        type TEXT,
-        command TEXT NULL
+        name TEXT,
+        type TEXT ,
+        command TEXT NOT NULL DEFAULT '',
+        UNIQUE(name, type, command)
     );
 
     CREATE TABLE IF NOT EXISTS template_edges (
@@ -136,13 +137,15 @@ def _init_db(conn: sqlite3.Connection):
         first INTEGER,
         second INTEGER,
         FOREIGN KEY (first) REFERENCES template_nodes(id),
-        FOREIGN KEY (second) REFERENCES template_nodes(id)
+        FOREIGN KEY (second) REFERENCES template_nodes(id),
+        UNIQUE(first, second, connection_name)
     );
     CREATE TABLE IF NOT EXISTS nodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE,
+        name TEXT,
         template_name INTEGER,
-        FOREIGN KEY (template_name) REFERENCES template_nodes(id)
+        FOREIGN KEY (template_name) REFERENCES template_nodes(id),
+        UNIQUE(name, template_name)
     );
     CREATE TABLE IF NOT EXISTS edges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,7 +153,8 @@ def _init_db(conn: sqlite3.Connection):
         first INTEGER,
         second INTEGER,
         FOREIGN KEY (first) REFERENCES nodes(id),
-        FOREIGN KEY (second) REFERENCES nodes(id)
+        FOREIGN KEY (second) REFERENCES nodes(id),
+        UNIQUE(first, second, connection_name)
     );
     CREATE TABLE IF NOT EXISTS extra_calculation_parameters (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,7 +220,7 @@ class Database:
             # Add edge from input data node to calculation node
             self.cursor.execute(
                 """
-                INSERT INTO template_edges (first, second, connection_name)
+                INSERT OR IGNORE INTO template_edges (first, second, connection_name)
                 SELECT t1.id, t2.id, ?
                 FROM template_nodes t1, template_nodes t2
                 WHERE t1.name = ? AND t2.name = ?
@@ -232,7 +236,7 @@ class Database:
             # Add edge from calculation node to output data node
             self.cursor.execute(
                 """
-                INSERT INTO template_edges (first, second, connection_name)
+                INSERT OR IGNORE INTO template_edges (first, second, connection_name)
                 SELECT t1.id, t2.id, ?
                 FROM template_nodes t1, template_nodes t2
                 WHERE t1.name = ? AND t2.name = ?
@@ -259,27 +263,70 @@ class Database:
         # Given the template, which nodes and edges describe a digprah, find the root nodes and all calculations
         self.cursor.execute("SELECT id, name, type FROM template_nodes")
         template_nodes = self.cursor.fetchall()
+        template_nodes_d = {c[0]:c[1] for c in template_nodes}
 
-        # Get all 
+        # Get all calculations
         self.cursor.execute("SELECT id, name, type FROM template_nodes WHERE type = 'calculation'")
         calculation_nodes = self.cursor.fetchall()
+        calculation_nodes_d = {c[0]: c[1] for c in calculation_nodes}
 
         # get all the template edges
         self.cursor.execute("SELECT id, first, second FROM template_edges")
         template_edges = self.cursor.fetchall()
 
-        # 
-        self.cursor.execute("SELECT second, COUNT(*) from template_edges group by second")
-        x = self.cursor.fetchall()
 
-        print(x)
-        print("---")
+        # Create a graph from nodes and edges
+        import networkx as nx
+        G = nx.DiGraph()
+        G.add_nodes_from(list(map(lambda x: x[0], template_nodes)))
+        G.add_edges_from(list(map(lambda x: (x[1], x[2]), template_edges)))
+
+        maps = {}
+        # transverse the graph from root to leaves
+        for node in nx.topological_sort(G):
+            print(node, G.in_edges(node), G.out_edges(node))
+            # if it is a leaf node, then it is a root node
+            if len(G.in_edges(node)) == 0:
+                pass
+            else:
+                # find all the paths from root to this node
+                pred = nx.ancestors(G, node)
+                # all calculations
+                all_c = pred.intersection(set(map(lambda x: x[0], calculation_nodes)))
+                # find all root nodes
+                root_nodes = [n for n in pred if len(G.in_edges(n)) == 0]
+
+                self_name  = template_nodes_d[node]
+                calcs = list(map(lambda i: calculation_nodes_d[i] ,all_c))
+                roots =list(map(lambda i: template_nodes_d[i], root_nodes))
+
+                name = self._generate_name(calcs, roots, self_name)
+                maps[node] = name
+                # Insert the node into the list of nodes
+            
+                self.cursor.execute(
+                    "INSERT OR IGNORE INTO nodes (name, template_name) VALUES (?, ?)", (name, node)
+                )
+        
+        # Create new calculation edges and insert them
+
+        for edge in template_edges:
+            first, second = edge[1], edge[2]
+            if first in maps and second in maps:
+                self.cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO edges (first, second, connection_name)
+                    SELECT n1.id, n2.id, ?
+                    FROM nodes n1, nodes n2
+                    WHERE n1.name = ? AND n2.name = ?
+                    """,
+                    (edge[2], maps[first], maps[second])
+                )
+
+        self.conn.commit()
 
 
-        print(calculation_nodes)
-        print('....')
-        print(template_nodes)
-        print(template_edges)
+
 
 
     def get(self, names: List[str]):
@@ -294,7 +341,22 @@ class Database:
     def copy(self):
         ...
 
+    def _generate_name(self, calcs: list[str], roots: list[str], self_name: str):
+        """calculate a hash based on calculations and roots"""
+        import hashlib
 
+        text  = ""
+        c = sorted(calcs)
+        roots = sorted(roots)
+        for i in roots:
+            text += i
+        for i in c:
+            text +=i
+        text +=  self_name
+        
+        h = md5_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+
+        return h
     def template_to_dot(self) -> str:
         """Convert the template to DOT format for visualization."""
         dot = ["digraph G {"]
@@ -342,9 +404,13 @@ if __name__ == "__main__":
     db = Database(read_only= False)
 
     for i in range(4):
-        db.template_register_calculation(f"calc{i}", command=f"python3 program.py input(data{i}) output(data{i+1})")
+        db.template_register_calculation(f"calci{i}", command=f"python3 program.py input(datai{i}) output(datai{i+1})")
 
     db.add_calculation()
 
-    # print("fisihed inserting")
-    # print(db.template_to_dot())
+    print("fisihed inserting")
+
+    print(db.template_to_dot())
+
+    print("---------------")
+    print(db.to_dot())
