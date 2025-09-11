@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sqlite3
 import pathlib
+from copy import deepcopy
 import re
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
@@ -53,7 +54,7 @@ class TemplateGroup:
         # add the template calculation node. (add calculation node as json)
         self.database.cursor.execute(
             "INSERT OR IGNORE INTO nodes (name, type, extra) VALUES (?, ?, ?)",
-            (name, "tem_cal", '{"command":' + command + '}' )
+            (name, "tem_cal", '{"command":' + f'"{command}"' + '}' )
         )
         
         # Insert inputs and outputs
@@ -109,7 +110,7 @@ class TemplateGroup:
         # Query the database to reconstruct the graph
         self.database.cursor.execute(
             """
-            SELECT n.id, n.name, n.type
+            SELECT n.id, n.name, n.type, json_extract(n.extra, '$.command') AS command
             FROM nodes n
             JOIN edges e ON n.id = e.second
             WHERE e.first = (SELECT id FROM nodes WHERE name = ? AND type = 'tem_group')
@@ -118,8 +119,8 @@ class TemplateGroup:
         )
         nodes = self.database.cursor.fetchall()
         node_dict = {}
-        for node_id, name, typ in nodes:
-            self.graph.add_node(name, label = node_id, type = typ)
+        for node_id, name, typ, extra in nodes:
+            self.graph.add_node(name, label = node_id, type = typ, command = extra)
             node_dict[node_id] = name
         # Get all edges between these nodes
         self.database.cursor.execute(
@@ -182,7 +183,7 @@ class TemplateGroup:
         """Create a unique hash for the template group."""
         import hashlib
         # Create a sorted representation of the graph
-        nodes = sorted((n, self.graph.nodes[n]['type'], self.graph.nodes[n].get('command', '')) for n in self.graph.nodes)
+        nodes = sorted(self.graph.nodes)
         edges = sorted((u, v) for u, v in self.graph.edges)
         representation = str(nodes) + str(edges)
         return hashlib.md5(representation.encode()).hexdigest()
@@ -246,7 +247,7 @@ class TemplateGroup:
 
 
 
-class instanceGroup:
+class InstanceGroup:
     """Wraps around a set of instance nodes and edges."""
     
     def __init__(self, database: Database):
@@ -262,6 +263,9 @@ class instanceGroup:
         # Get the template group from the database (from edges where first is the template with the id and )
         template = TemplateGroup(self.database)
         template.construct_graph(template_group_name)
+
+        self.graph = deepcopy(template.graph)
+
         if template.graph is None:
             raise ValueError("Template graph is not constructed. most likely failed to find template id.")
 
@@ -278,44 +282,116 @@ class instanceGroup:
             if template.graph.in_degree(root_name) != 0:
                 raise ValueError(f"Node {root_name} is not a root node.")
             # rename the node in the template graph
-            template.graph = nx.relabel_nodes(template.graph, {root_name: root_value})
+            self.graph = nx.relabel_nodes(self.graph, {root_name: root_value})
 
+        mapping = roots
         # Now each graph and point are uniquely identified by the root nodes and the template.
-        mapping = {}
-        for node in nx.topological_sort(template.graph):
-            predecessors = nx.ancestors(template.graph, node)
+        for node in nx.topological_sort(self.graph):
+            predecessors = nx.ancestors(self.graph, node)
+            if not predecessors:
+                # Skip root nodes
+                continue
             predecessors.add(node) # include the node itself
             hash_input = str(sorted(predecessors)).encode()
             node_hash = hashlib.md5(hash_input).hexdigest() # first
             mapping[node] = node_hash
 
+        print(mapping)
+        
+        for node, node_hash in mapping.items():
+            self.graph = nx.relabel_nodes(self.graph, {node: node_hash})
+        
+
         # Insert into the database all new calculations
-        for node in template.graph.nodes:
-            node_type = template.graph.nodes[node]['type']
+        def replacer(match):
+            key = match.group(2)
+            return mapping.get(key, match.group(0))
+        
+        print(self.graph.nodes)
+
+        for node in self.graph.nodes:
+            node_type = self.graph.nodes[node]['type']
             if node_type == 'tem_dat':
                 self.database.cursor.execute(
                     "INSERT OR IGNORE INTO nodes (name, type) VALUES (?, ?)",
-                    (mapping[node], "ins_dat")
+                    (node, "ins_dat")
                 )
             elif node_type == 'tem_cal':
-                command = template.graph.nodes[node]['command']
+                command = self.graph.nodes[node]['command']
+                # replace (input(data1)) with the mapping value
+                pattern = re.compile(r"(input|output)\((\w+)\)")                
+                new_command = pattern.sub(replacer, command)
+
                 self.database.cursor.execute(
                     "INSERT OR IGNORE INTO nodes (name, type, extra) VALUES (?, ?, ?)",
-                    (mapping[node], "ins_cal", '{"command":' + command + '}' )
+                    (node, "ins_cal", '{"command":' + f'"{new_command}"' + '}' )
                 )
             else:
                 raise ValueError(f"Unknown node type {node_type} in template graph.")
 
-            
+        # TODO: Might want to add edges between calculations.
 
-    def register_instance_group(self, instance_group: instanceGroup):
+        for first, second in self.graph.edges:
+            self.database.cursor.execute(
+                """
+                INSERT OR IGNORE INTO edges (first, second)
+                VALUES ((SELECT id FROM nodes WHERE name = ?),
+                    (SELECT id FROM nodes WHERE name = ?)
+                )
+                """,
+                (first, second)
+            )
+
+
+        # Insert edges between group and all template nodes
+        for template_name, instance_name in mapping.items():
+            self.database.cursor.execute(
+                """
+                INSERT OR IGNORE INTO edges (first, second)
+                VALUES ((SELECT id FROM nodes WHERE name = ?),
+                    (SELECT id FROM nodes WHERE name = ?)
+                )
+                """,
+                (template_name, instance_name)
+            )
+
+    def commit(self) -> str:
+        if self.graph is None:
+            raise ValueError("In memory graph is not defined. Either it was never created or already committed.")
+
+        # Create a unique hash for the template group
+        group_hash = self._hash()
+
+        self.database.cursor.execute(
+            "INSERT OR IGNORE INTO nodes (name, type, extra) VALUES (?, ?, ?)",
+            (group_hash, "ins_group", None)
+        )
+        # Insert edges between group and all template nodes
+        for node in self.graph.nodes:
+            print(node)
+            self.database.cursor.execute(
+                """
+                INSERT OR IGNORE INTO edges (first, second)
+                VALUES (
+                    (SELECT id FROM nodes WHERE name = ?),
+                    (SELECT id FROM nodes WHERE name = ?)
+                )
+                """,
+                (group_hash, node)
+            )
+
+        self.database.conn.commit()
+        self.graph = None
+        self.hash = group_hash
+        return group_hash
+
+
+    def register_instance_group(self, instance_group: InstanceGroup):
         pass
 
     def delete_and_commit(self):
         pass
 
-    def commit(self) -> str:
-        pass
 
     def to_bash(self) -> str:
         pass
@@ -326,7 +402,15 @@ class instanceGroup:
     def __str__(self):
         pass
 
-
+    
+    def _hash(self):
+        """Create a unique hash for the template group."""
+        import hashlib
+        # Create a sorted representation of the graph
+        nodes = sorted(self.graph.nodes)
+        edges = sorted((u, v) for u, v in self.graph.edges)
+        representation = str(nodes) + str(edges)
+        return hashlib.md5(representation.encode()).hexdigest()
 
 class Database:
 
@@ -339,14 +423,45 @@ class Database:
     def new_template_group(self) -> TemplateGroup:
         return TemplateGroup(self)
 
-    def new_instance_group(self) -> instanceGroup:
-        return instanceGroup(self)
+    def new_instance_group(self) -> InstanceGroup:
+        return InstanceGroup(self)
 
-    def get_instance_group(self, instance_group_id: list[str] | str) -> instanceGroup:
+    def get_instance_group(self, instance_group_id: list[str] | str) -> InstanceGroup:
         pass
 
-
+    def as_dot(self):
+        """return the whole database as in dot format"""
     
+        """Reconstruct the graph from the database."""
+
+        # Query the database to reconstruct the graph
+        dot = "digraph G {\n"
+        # Get all nodes in the group
+        self.cursor.execute(
+            """
+            SELECT n.id, n.name, n.type, n.extra
+            FROM nodes n
+            """
+        )
+        nodes = self.cursor.fetchall()
+        node_dict = {}
+        for node_id, name, ntype, extra in nodes:
+            label = f"{name}"
+
+            dot += f'  {node_id} [label="{label}"];\n'
+            node_dict[node_id] = name
+        # Get all edges between these nodes
+        self.cursor.execute(
+            """
+            SELECT e.first, e.second
+            FROM edges e
+            """
+        )
+        edges = self.cursor.fetchall()
+        for first, second in edges:
+            dot += f'  {first} -> {second};\n'
+        dot += "}\n"
+        return dot
 
 
 
@@ -356,8 +471,9 @@ if __name__ == "__main__":
 
 
     tg = db.new_template_group()
-    for i in range(20):
-        tg.register(f"calc{i}",f"python3 script.py input(data{i}) output(data{i+1})")
+    tg.register(f"calc1",f"python3 script.py input(common_input) output(data2)")
+    tg.register(f"calc2",f"python3 script.py input(data2) input(data1) output(data3)")
+
 
     tg_name = tg.commit()
 
@@ -367,13 +483,17 @@ if __name__ == "__main__":
 
     # now create some calculations
     cg = db.new_instance_group()
-    for i in range(4):
+    common_input = "hello"
+    for i in range(2):
         print("-------")
-        cg.register(template_group_name = tg_name, roots = {"data0": f"mycustomcooldata{i}"})
+        cg.register(template_group_name = tg_name, roots = {"data1": f"mycustomcooldata{i}",
+                                                            "common_input": common_input})
 
     cg_name = cg.commit()
 
+    print(db.as_dot())
 
+    
 
     # break
     # tg = db.new_template_group()
