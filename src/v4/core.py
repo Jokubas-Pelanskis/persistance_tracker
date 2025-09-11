@@ -261,10 +261,11 @@ class InstanceGroup:
         Given the template group name (a pipeline that I want to calculate) and the leafs (input data nodes) it creates instance nodes. Node names are calculated based on root nodes and intermediate calculation nodes.
         """
         # Get the template group from the database (from edges where first is the template with the id and )
+
         template = TemplateGroup(self.database)
         template.construct_graph(template_group_name)
 
-        self.graph = deepcopy(template.graph)
+        local_graph = deepcopy(template.graph)
 
         if template.graph is None:
             raise ValueError("Template graph is not constructed. most likely failed to find template id.")
@@ -282,12 +283,12 @@ class InstanceGroup:
             if template.graph.in_degree(root_name) != 0:
                 raise ValueError(f"Node {root_name} is not a root node.")
             # rename the node in the template graph
-            self.graph = nx.relabel_nodes(self.graph, {root_name: root_value})
+            local_graph = nx.relabel_nodes(local_graph, {root_name: root_value})
 
         mapping = roots
         # Now each graph and point are uniquely identified by the root nodes and the template.
-        for node in nx.topological_sort(self.graph):
-            predecessors = nx.ancestors(self.graph, node)
+        for node in nx.topological_sort(local_graph):
+            predecessors = nx.ancestors(local_graph, node)
             if not predecessors:
                 # Skip root nodes
                 continue
@@ -295,29 +296,25 @@ class InstanceGroup:
             hash_input = str(sorted(predecessors)).encode()
             node_hash = hashlib.md5(hash_input).hexdigest() # first
             mapping[node] = node_hash
-
-        print(mapping)
         
         for node, node_hash in mapping.items():
-            self.graph = nx.relabel_nodes(self.graph, {node: node_hash})
+            local_graph = nx.relabel_nodes(local_graph, {node: node_hash})
         
 
         # Insert into the database all new calculations
         def replacer(match):
             key = match.group(2)
             return mapping.get(key, match.group(0))
-        
-        print(self.graph.nodes)
 
-        for node in self.graph.nodes:
-            node_type = self.graph.nodes[node]['type']
+        for node in local_graph.nodes:
+            node_type = local_graph.nodes[node]['type']
             if node_type == 'tem_dat':
                 self.database.cursor.execute(
                     "INSERT OR IGNORE INTO nodes (name, type) VALUES (?, ?)",
                     (node, "ins_dat")
                 )
             elif node_type == 'tem_cal':
-                command = self.graph.nodes[node]['command']
+                command = local_graph.nodes[node]['command']
                 # replace (input(data1)) with the mapping value
                 pattern = re.compile(r"(input|output)\((\w+)\)")                
                 new_command = pattern.sub(replacer, command)
@@ -331,7 +328,7 @@ class InstanceGroup:
 
         # TODO: Might want to add edges between calculations.
 
-        for first, second in self.graph.edges:
+        for first, second in local_graph.edges:
             self.database.cursor.execute(
                 """
                 INSERT OR IGNORE INTO edges (first, second)
@@ -355,6 +352,14 @@ class InstanceGroup:
                 (template_name, instance_name)
             )
 
+        # extend the graph by the local graph
+        if self.graph is None:
+            self.graph = local_graph
+        else: 
+            self.graph.update(local_graph)
+
+
+
     def commit(self) -> str:
         if self.graph is None:
             raise ValueError("In memory graph is not defined. Either it was never created or already committed.")
@@ -368,7 +373,6 @@ class InstanceGroup:
         )
         # Insert edges between group and all template nodes
         for node in self.graph.nodes:
-            print(node)
             self.database.cursor.execute(
                 """
                 INSERT OR IGNORE INTO edges (first, second)
@@ -384,6 +388,33 @@ class InstanceGroup:
         self.graph = None
         self.hash = group_hash
         return group_hash
+
+
+    def get_commands(self, template_name: str):
+        """Get all the commands for a certain template name"""
+        if self.graph is not None:
+            raise ValueError("Wrong mode. Please commit before running.")
+        
+        self.database.cursor.execute(
+            """
+            SELECT n.*
+            FROM nodes n
+            JOIN edges e1 ON n.id = e1.second
+            JOIN nodes n1 ON e1.first = n1.id
+                AND n1.type = 'ins_group'
+                AND n1.name = ?
+            JOIN edges e2 ON n.id = e2.second
+            JOIN nodes n2 ON e2.first = n2.id
+                AND n2.type = 'tem_cal'
+                AND n2.name = ?
+            """,
+            (self.hash, template_name)
+        )
+        nodes = self.database.cursor.fetchall()     
+
+        return nodes   
+
+
 
 
     def register_instance_group(self, instance_group: InstanceGroup):
@@ -484,12 +515,14 @@ if __name__ == "__main__":
     # now create some calculations
     cg = db.new_instance_group()
     common_input = "hello"
-    for i in range(2):
-        print("-------")
+    for i in range(3):
         cg.register(template_group_name = tg_name, roots = {"data1": f"mycustomcooldata{i}",
                                                             "common_input": common_input})
 
     cg_name = cg.commit()
+
+    command_list = cg.get_commands("calc2")
+    print(command_list)
 
     print(db.as_dot())
 
