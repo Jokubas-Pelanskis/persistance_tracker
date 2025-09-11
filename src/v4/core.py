@@ -2,6 +2,7 @@ from __future__ import annotations
 import sqlite3
 import pathlib
 import re
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 import re
 import networkx as nx
@@ -35,7 +36,7 @@ class TemplateGroup:
 
     def __init__(self, database: Database):
         self.database = database
-        self.graph: Optional[nx.DiGraph] = nx.DiGraph() # Stores the template as graph.
+        self.graph: Optional[nx.DiGraph] = None # Stores the template as graph.
         self.hash : Optional[str] = None
 
     def register(self, name: str, command: str):
@@ -88,6 +89,8 @@ class TemplateGroup:
             )
         
         # add to the graph (for in-memory representation and used to calculate the hash.)
+        if self.graph is None:
+            self.graph = nx.DiGraph()
         self.graph.add_node(name, type="tem_cal", command=command)
         for inp in inputs:
             self.graph.add_node(inp, type="tem_dat")
@@ -95,6 +98,52 @@ class TemplateGroup:
         for out in outputs:
             self.graph.add_node(out, type="tem_dat")
             self.graph.add_edge(name, out)
+
+    def construct_graph(self, hash: str):
+        """Construct the graph from the database given the hash."""
+        self.hash = hash
+        if self.graph is not None:
+            raise ValueError("Graph is already in memory. This function is for creating graph from the database. You are in a wrong mode.")
+        
+        self.graph = nx.DiGraph()
+        # Query the database to reconstruct the graph
+        self.database.cursor.execute(
+            """
+            SELECT n.id, n.name, n.type
+            FROM nodes n
+            JOIN edges e ON n.id = e.second
+            WHERE e.first = (SELECT id FROM nodes WHERE name = ? AND type = 'tem_group')
+            """,
+            (self.hash,)
+        )
+        nodes = self.database.cursor.fetchall()
+        node_dict = {}
+        for node_id, name, typ in nodes:
+            self.graph.add_node(name, label = node_id, type = typ)
+            node_dict[node_id] = name
+        # Get all edges between these nodes
+        self.database.cursor.execute(
+            """
+            SELECT e.first, e.second
+            FROM edges e
+            WHERE e.first IN (
+                SELECT n.id
+                FROM nodes n
+                JOIN edges e2 ON n.id = e2.second
+                WHERE e2.first = (SELECT id FROM nodes WHERE name = ? AND type = 'tem_group')
+            )
+            AND e.second IN (
+                SELECT n.id
+                FROM nodes n
+                JOIN edges e2 ON n.id = e2.second
+                WHERE e2.first = (SELECT id FROM nodes WHERE name = ? AND type = 'tem_group')
+            )
+            """,
+            (self.hash, self.hash)
+        )
+        edges = self.database.cursor.fetchall()
+        for first, second in edges:
+            self.graph.add_edge(node_dict[first], node_dict[second])
 
     def commit(self) -> str:
         """
@@ -129,7 +178,6 @@ class TemplateGroup:
         self.hash = group_hash
         return group_hash
 
-
     def _hash(self) -> str:
         """Create a unique hash for the template group."""
         import hashlib
@@ -137,8 +185,7 @@ class TemplateGroup:
         nodes = sorted((n, self.graph.nodes[n]['type'], self.graph.nodes[n].get('command', '')) for n in self.graph.nodes)
         edges = sorted((u, v) for u, v in self.graph.edges)
         representation = str(nodes) + str(edges)
-        return hashlib.sha256(representation.encode()).hexdigest()
-
+        return hashlib.md5(representation.encode()).hexdigest()
 
     def graph_dot(self) -> str:
         """A method for testing before committing. To make sure the graph is correct."""
@@ -197,6 +244,8 @@ class TemplateGroup:
         dot += "}\n"
         return dot
 
+
+
 class instanceGroup:
     """Wraps around a set of instance nodes and edges."""
     
@@ -205,31 +254,59 @@ class instanceGroup:
         self.graph: Optional[nx.DiGraph] = nx.DiGraph() # Stores
         self.hash : Optional[str] = None
 
-    def register(self, template_group_name: str, leafs: dict[str, str]):
+    def register(self, template_group_name: str, roots: dict[str, str]):
         
         """
         Given the template group name (a pipeline that I want to calculate) and the leafs (input data nodes) it creates instance nodes. Node names are calculated based on root nodes and intermediate calculation nodes.
         """
         # Get the template group from the database (from edges where first is the template with the id and )
-        self.database.cursor.execute(
-            """
-            SELECT n2.id, n2.name
-            FROM nodes n1
-            JOIN edges e ON n1.id = e.first
-            JOIN nodes n2 ON e.second = n2.id
-            WHERE n1.name = ? AND n1.type = 'tem_group'
-            """,
-            (template_group_name,)
-        )
-        template_nodes = self.database.cursor.fetchall()
+        template = TemplateGroup(self.database)
+        template.construct_graph(template_group_name)
+        if template.graph is None:
+            raise ValueError("Template graph is not constructed. most likely failed to find template id.")
 
-        # select all edges 
-        print(template_nodes)
+        # Check if all roots are provided (root_name, root_value)
+        for node in template.graph.nodes:
+            if template.graph.in_degree(node) == 0: # root node
+                if node not in roots:
+                    raise ValueError(f"Root node {node} is not provided in the roots dictionary.")
+                
+        # for the root nodes, rename them based on the provided roots
+        for root_name, root_value in roots.items():
+            if root_name not in template.graph.nodes:
+                raise ValueError(f"Root node {root_name} is not in the template graph.")
+            if template.graph.in_degree(root_name) != 0:
+                raise ValueError(f"Node {root_name} is not a root node.")
+            # rename the node in the template graph
+            template.graph = nx.relabel_nodes(template.graph, {root_name: root_value})
 
+        # Now each graph and point are uniquely identified by the root nodes and the template.
+        mapping = {}
+        for node in nx.topological_sort(template.graph):
+            predecessors = nx.ancestors(template.graph, node)
+            predecessors.add(node) # include the node itself
+            hash_input = str(sorted(predecessors)).encode()
+            node_hash = hashlib.md5(hash_input).hexdigest() # first
+            mapping[node] = node_hash
 
-        # Go through all the template nodes in topological order and for each find it's root nodes and intermediate calculations. Based on these calculate hash.
+        # Insert into the database all new calculations
+        for node in template.graph.nodes:
+            node_type = template.graph.nodes[node]['type']
+            if node_type == 'tem_dat':
+                self.database.cursor.execute(
+                    "INSERT OR IGNORE INTO nodes (name, type) VALUES (?, ?)",
+                    (mapping[node], "ins_dat")
+                )
+            elif node_type == 'tem_cal':
+                command = template.graph.nodes[node]['command']
+                self.database.cursor.execute(
+                    "INSERT OR IGNORE INTO nodes (name, type, extra) VALUES (?, ?, ?)",
+                    (mapping[node], "ins_cal", '{"command":' + command + '}' )
+                )
+            else:
+                raise ValueError(f"Unknown node type {node_type} in template graph.")
 
-
+            
 
     def register_instance_group(self, instance_group: instanceGroup):
         pass
@@ -284,13 +361,17 @@ if __name__ == "__main__":
 
     tg_name = tg.commit()
 
+    new_template = TemplateGroup(database=db)
+    new_template.construct_graph(tg_name)
+
+
     # now create some calculations
     cg = db.new_instance_group()
     for i in range(4):
-        cg.register(template_group_name = tg_name, leafs = {"data0": f"start{i}"})
+        print("-------")
+        cg.register(template_group_name = tg_name, roots = {"data0": f"mycustomcooldata{i}"})
 
     cg_name = cg.commit()
-    print(cg_name)
 
 
 
