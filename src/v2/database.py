@@ -167,12 +167,20 @@ def _init_db(conn: sqlite3.Connection):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_time TEXT
     );
-    CREATE TABLE IF NOT EXISTS sessions_nodes (
+    CREATE TABLE IF NOT EXISTS session_edges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id INTEGER,
-        node_id INTEGER,
+        node_id INTEGER TIMPESTAMP,
         FOREIGN KEY (session_id) REFERENCES sessions(id),
         FOREIGN KEY (node_id) REFERENCES nodes(id)
+    );
+                    
+    CREATE TABLE IF NOT EXISTS session_template_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER,
+        node_id INTEGER TIMPESTAMP,
+        FOREIGN KEY (session_id) REFERENCES sessions(id),
+        FOREIGN KEY (node_id) REFERENCES template_nodes(id)
     );
 
     -- create indexes
@@ -198,15 +206,23 @@ def _init_db(conn: sqlite3.Connection):
     conn.commit()
 
 class Database:
-    def __init__(self, session_ids: Optional[List[int]] = None, read_only: bool = True):
+    def __init__(self, session_ids: Optional[List[str]] = None, read_only: bool = True):
+        """
+        Notes:
+        - session_ids: if provided, only calculations from these sessions are considered. If None,
+            then the new database is being created.
+        """
         self.conn = sqlite3.connect(DB_PATH)
         _init_db(self.conn)
         self.read_only = read_only
-        self.session_ids = session_ids or []
+        self.session_ids : list[str] | None = session_ids
         self.cursor = self.conn.cursor()
 
 
     def template_register_calculation(self, name: str,command = str):
+        """
+        NOTE: at this point session_id is not known.
+        """
         self.cursor.execute(
             "INSERT OR IGNORE INTO template_nodes (name, type) VALUES (?, ?)", (name, "calculation")
         )
@@ -253,7 +269,8 @@ class Database:
 
     def add_calculation(self):
         """
-        Add a new calculation to the database based on the current template, which is determined by the session id
+        Add a new calculation to the database based on the current template, which is determined by the session id.
+        NOTE database does not necessarily have to represent the full template, it can only have a subset of the template. (subset of the template is identified by the session id.)
         """
         if self.read_only:
             raise ValueError("Database is read-only. Cannot add calculation.")
@@ -325,7 +342,10 @@ class Database:
 
         self.conn.commit()
 
-
+    def commit(self):
+        """
+        Calculate session id and the commit the database
+        """
 
 
 
@@ -354,9 +374,10 @@ class Database:
             text +=i
         text +=  self_name
         
-        h = md5_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
-
+        h = hashlib.md5(text.encode("utf-8")).hexdigest()
         return h
+    
+
     def template_to_dot(self) -> str:
         """Convert the template to DOT format for visualization."""
         dot = ["digraph G {"]
@@ -389,9 +410,15 @@ class Database:
 
 
 def connect(session_ids: List[int]) -> Database:
+    """
+    Connect to an existing database with the given session ids.
+    """
     return Database(session_ids=session_ids, read_only=True)
 
 def create_empty() -> Tuple[Database, int]:
+    """
+    Creates an empty database with a temporary session id.
+    """
     db = Database(read_only=False)
     db.cursor.execute("INSERT INTO sessions (session_time) VALUES (datetime('now'))")
     session_id = db.cursor.lastrowid
