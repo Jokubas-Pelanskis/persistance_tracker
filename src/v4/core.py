@@ -397,7 +397,7 @@ class InstanceGroup:
         
         self.database.cursor.execute(
             """
-            SELECT n.*
+            SELECT json_extract(n.extra, '$.command') AS command
             FROM nodes n
             JOIN edges e1 ON n.id = e1.second
             JOIN nodes n1 ON e1.first = n1.id
@@ -412,9 +412,106 @@ class InstanceGroup:
         )
         nodes = self.database.cursor.fetchall()     
 
-        return nodes   
+        return list(map(lambda x: x[0], nodes))
 
 
+
+    def get_table(self, columns: list[str] | str):
+        """
+        gets calculation names as a table, where each row corresponds to a unique path through the diagram.
+        """
+
+        if self.graph is not None:
+            raise ValueError("Wrong mode. Please commit before running.")
+        
+        if isinstance(columns, str):
+            columns = [columns]
+
+        # Get data that belongs to under a certain calculation
+        # get the nodes
+
+        # select nodes of inetrest
+
+        nodes = []
+        for column in columns:
+            self.database.cursor.execute(
+                f"""
+                SELECT n.id
+                FROM nodes n
+                JOIN edges e1 ON n.id = e1.second
+                JOIN nodes n1 ON e1.first = n1.id
+                    AND n1.type = 'ins_group'
+                    AND n1.name = ?
+                JOIN edges e2 ON n.id = e2.second
+                JOIN nodes n2 ON e2.first = n2.id
+                    AND n2.type IN ('tem_cal', 'tem_dat')
+                    AND n2.name = ?
+                """,
+                (self.hash, column)
+            )
+            ns = self.database.cursor.fetchall()  
+            nodes.append(list(map(lambda x: x[0], ns)))
+        
+        print(nodes)
+
+        # select all nodes
+        self.database.cursor.execute(
+            """
+            SELECT n.name
+            FROM nodes n
+            JOIN edges e1 ON n.id = e1.second
+            JOIN nodes n1 ON e1.first = n1.id
+                AND n1.type = 'ins_group'
+                AND n1.name = ?
+            """,
+            (self.hash,)
+        )
+        all_nodes = self.database.cursor.fetchall()    
+        # get the edges
+        self.database.cursor.execute(
+            """
+            SELECT src.id AS source_name, tgt.id AS target_name
+            FROM edges e
+            JOIN nodes src ON e.first = src.id
+            JOIN nodes tgt ON e.second = tgt.id
+            WHERE src.id IN (
+                SELECT n.id
+                FROM nodes n
+                JOIN edges e1 ON n.id = e1.second
+                JOIN nodes n1 ON e1.first = n1.id
+                    AND n1.type = 'ins_group'
+                    AND n1.name = ?
+            )
+            OR tgt.id IN (
+                SELECT n.id
+                FROM nodes n
+                JOIN edges e1 ON n.id = e1.second
+                JOIN nodes n1 ON e1.first = n1.id
+                    AND n1.type = 'ins_group'
+                    AND n1.name = ?
+            )
+            """,
+            (self.hash, self.hash)
+        )
+
+        edges = self.database.cursor.fetchall() 
+
+        # construct a graph  
+        G = nx.DiGraph()
+        G.add_nodes_from(all_nodes)
+        G.add_edges_from(edges)
+
+        def path_exists_through_nodes(G, nodes):
+            for i in range(len(nodes) - 1):
+                if not nx.has_path(G, nodes[i], nodes[i+1]):
+                    return False
+            return True
+        
+        from itertools import product
+
+        for combo in product(*nodes):
+            is_path = path_exists_through_nodes(G, combo)
+            print(combo, is_path)
 
 
     def register_instance_group(self, instance_group: InstanceGroup):
@@ -424,14 +521,9 @@ class InstanceGroup:
         pass
 
 
-    def to_bash(self) -> str:
-        pass
-
     def filter_template(self, template_names: list[str]):
         pass
 
-    def __str__(self):
-        pass
 
     
     def _hash(self):
@@ -505,26 +597,24 @@ if __name__ == "__main__":
     tg.register(f"calc1",f"python3 script.py input(common_input) output(data2)")
     tg.register(f"calc2",f"python3 script.py input(data2) input(data1) output(data3)")
 
-
     tg_name = tg.commit()
-
-    new_template = TemplateGroup(database=db)
-    new_template.construct_graph(tg_name)
-
 
     # now create some calculations
     cg = db.new_instance_group()
     common_input = "hello"
-    for i in range(3):
+    for i in range(4):
         cg.register(template_group_name = tg_name, roots = {"data1": f"mycustomcooldata{i}",
                                                             "common_input": common_input})
 
     cg_name = cg.commit()
+    # print("commands for calculation1")
+    # command_list = cg.get_commands("calc1")
+    # print(command_list)
+    # print("commands for calculation2")
+    # command_list = cg.get_commands("calc2")
+    # print(command_list)
 
-    command_list = cg.get_commands("calc2")
-    print(command_list)
-
-    print(db.as_dot())
+    print(cg.get_table( ["data2", "data1"]))
 
     
 
