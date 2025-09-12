@@ -115,6 +115,27 @@ class CalculationBuilder:
     def register(self, template_group_name: str, roots: dict[str, str]):
         # check if roots are correct before moving on.
         
+        nodes = self.database.conn.execute("""
+                MATCH (tg: Template_Group {name:$template_group})-[r:TEMPLATE_CALCULATION_GROUPS|TEMPLATE_DATA_GROUPS]->(target)
+                RETURN target.name
+            """,
+            parameters = {"template_group": template_group_name})
+        nodes = [row[0] for row in nodes]
+        root_query = """
+            MATCH (n)
+            WHERE n.name IN $nodes
+            AND NOT EXISTS {
+                MATCH (m)-[:TEMPLATE_INPUT|TEMPLATE_OUTPUT]->(n)
+                WHERE m.name IN $nodes
+            }
+            RETURN n.name AS root_name
+        """
+        root_nodes = [row[0] for row in self.database.conn.execute(root_query, parameters={"nodes": nodes})]
+
+        if set(root_nodes) != set(roots.keys()):
+            raise ValueError(f"Wrong roots provided. all roots need to be determined. roots: {set(roots.keys())}; template_roots: {set(root_nodes)}")
+
+
         if self.data_nodes is None:
             self.data_nodes = set()
         
@@ -167,9 +188,7 @@ class CalculationBuilder:
             root_subset  = {k: roots[k] for k in history_nodes if k in roots}
             graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
             hash_string = graph_string + c_node + json.dumps(root_subset,sort_keys=True) # combine all information to uniquely 
-            print(c_node)
-            print(hash_string)
-            print("---")
+
             hash_name_calculation = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
             calculation_mapping[c_node] = hash_name_calculation
 
@@ -521,13 +540,13 @@ if __name__ == "__main__":
                              "common_input": common_input})
     cg_name1 = cg.commit()
 
-    # cg = db.get_calculation_builder()
-    # common_input = "mycustomdatanameyay"
-    # for i in range(4):
-    #     cg.register(template_group_name = tg_name, 
-    #                 roots = {"data1": f"mycustomcooldata{i+10}",
-    #                          "common_input": common_input})
-    # cg_name2 = cg.commit()
+    cg = db.get_calculation_builder()
+    common_input = "mycustomdatanameyay"
+    for i in range(4):
+        cg.register(template_group_name = tg_name, 
+                    roots = {"data1": f"mycustomcooldata{i+10}",
+                             "common_input": common_input})
+    cg_name2 = cg.commit()
 
     # now connect to calculations for inspection.
     print("starting query")
@@ -544,7 +563,7 @@ if __name__ == "__main__":
         anchor = "data3", 
         other_nodes=["data1", "data2"])
 
-    print(db.dot_calculations(calculation_groups = [cg_name1]))
+    print(db.dot_calculations(calculation_groups = [cg_name1, cg_name2]))
 
     # query_builder = db.get_query_builder()
     # query_builder.filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1", "data2"])
