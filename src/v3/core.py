@@ -121,8 +121,7 @@ class CalculationBuilder:
         if self.calculation_nodes is None:
             self.calculation_nodes = set()
 
-        # create a string to calculate a hash
-        roots_string = json.dumps(roots, sort_keys=True)
+
 
         # ------------
         # Find all calculation in the template
@@ -163,10 +162,14 @@ class CalculationBuilder:
                     RETURN ancestor.name
                 """,
                 parameters = {"name": c_node})
-            
+            # filter roots by history_nodes
+            history_nodes = list(map(lambda x: x[0], history_nodes))
+            root_subset  = {k: roots[k] for k in history_nodes if k in roots}
             graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
-            hash_string = graph_string + c_node + roots_string # combine all information to uniquely 
-
+            hash_string = graph_string + c_node + json.dumps(root_subset,sort_keys=True) # combine all information to uniquely 
+            print(c_node)
+            print(hash_string)
+            print("---")
             hash_name_calculation = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
             calculation_mapping[c_node] = hash_name_calculation
 
@@ -178,8 +181,10 @@ class CalculationBuilder:
                             RETURN ancestor.name
                         """,
                         parameters = {"name": data_node[0]})
+                    history_nodes = list(map(lambda x: x[0], history_nodes))
                     graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
-                    hash_string = graph_string + data_node[0] + roots_string # combine all information to uniquely identify the node
+                    root_subset  = {k: roots[k] for k in history_nodes if k in roots}
+                    hash_string = graph_string + data_node[0] + json.dumps(root_subset,sort_keys=True) # combine all information to uniquely identify the node
 
 
                     hash_name = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
