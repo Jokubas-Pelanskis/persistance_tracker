@@ -1,0 +1,785 @@
+from __future__ import annotations
+
+import pathlib
+from copy import deepcopy
+import re
+import hashlib
+from typing import Any, Dict, List, Optional, Tuple
+import re
+import kuzu
+import json
+import pandas as pd
+
+DB_PATH = "persistance_tracker.db"
+
+
+class TemplateBuilder:
+    """Wraps around a set of templates nodes and edges."""
+
+    def __init__(self, database: Database):
+        self.database = database
+        self.data_nodes: list[str] | None = None
+        self.calculation_nodes: list[str] | None = None
+
+    def register(self, name: str, command: str):
+        """
+        Given the name and the command of the template it creates template nodes
+        What it does:
+        - Extract inputs and outputs using regex
+        - Create calculation nodes and all relevant data nodes. and insert into the database.
+        """
+        if self.data_nodes is None:
+            self.data_nodes = []
+        if self.calculation_nodes is None:
+            self.calculation_nodes = []
+
+        # extract inputs, outputs and the command
+        inputs = re.findall(r'input\((.*?)\)', command)
+        outputs = re.findall(r'output\((.*?)\)', command)
+
+        self.database.conn.execute("MERGE (:Template_Calculation {name: $name, command: $command})", parameters = {"name": name, "command": command})
+
+        for inp in inputs:
+            self.database.conn.execute("MERGE (:Template_Data {name: $name})", parameters = {"name": inp})
+            self.database.conn.execute("""
+                MATCH (td:Template_Data {name:$input_name}), (tc:Template_Calculation {name:$calculation_name})
+                MERGE (td)-[r:TEMPLATE_INPUT]->(tc)
+            """,
+            parameters = {"input_name": inp, "calculation_name" : name})
+
+
+        for out in outputs:
+
+            self.database.conn.execute("MERGE (:Template_Data {name: $name})", parameters = {"name": out})
+            self.database.conn.execute("""
+                MATCH (td:Template_Data {name:$output_name}), (tc:Template_Calculation {name:$calculation_name})
+                MERGE (tc)-[r:TEMPLATE_OUTPUT]->(td)
+            """,
+            parameters = {"output_name": out, "calculation_name" : name})
+
+        self.calculation_nodes.append(name)
+        self.data_nodes.extend(inputs)
+        self.data_nodes.extend(outputs)
+
+    def commit(self) -> str:
+        """
+        Commit the template group to the database.
+        Add tem_group node and 
+        """
+        assert self.data_nodes is not None
+        assert self.calculation_nodes is not None
+
+        template_group_name = self._hash()
+        self.database.conn.execute("MERGE (:Template_Group {name: $name})", parameters = {"name": template_group_name})
+
+        for node in self.data_nodes:
+            self.database.conn.execute("""
+                MATCH (tg:Template_Group {name:$template_group_name}), (td:Template_Data {name:$data_name})
+                MERGE (tg)-[r:TEMPLATE_DATA_GROUPS]->(td)
+            """,
+            parameters = {"template_group_name": template_group_name, "data_name" : node})
+
+        for node in self.calculation_nodes:
+            self.database.conn.execute("""
+                MATCH (tg:Template_Group {name:$template_group_name}), (tc:Template_Calculation {name:$calculation_name})
+                MERGE (tg)-[r:TEMPLATE_CALCULATION_GROUPS]->(tc)
+            """,
+            parameters = {"template_group_name": template_group_name, "calculation_name" : node})
+        
+        return template_group_name
+
+    def select_history(self, template_name: str):
+        """selects the history of the template"""
+
+        if self.data_nodes is None or self.calculation_nodes is None:
+            raise ValueError("history selection must be done before commit")
+        
+        if template_name in self.data_nodes:
+            raise ValueError("Must provide calculation name. (There could be multiple outputs for a calculation)")
+        
+        if not template_name in self.calculation_nodes:
+            raise ValueError("Calculation is not in the current template. Cannot select history.")
+        
+        f_calculation_nodes = self.database.conn.execute("""
+            MATCH (src:Template_Calculation)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT*]->(dst:Template_Calculation)
+            WHERE src.name IN $nodes AND dst.name = $template_name
+            RETURN DISTINCT src.name
+        """, parameters={"nodes": self.calculation_nodes, "template_name":template_name})
+
+        f_calculation_nodes = [x[0] for x in f_calculation_nodes]
+
+        f_data_nodes = self.database.conn.execute("""
+            MATCH (src:Template_Data)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT*]->(dst:Template_Calculation)
+            WHERE src.name IN $nodes AND dst.name = $template_name
+            RETURN DISTINCT src.name
+        """, parameters={"nodes": self.data_nodes, "template_name":template_name})
+
+        # Add outputs
+        output_nodes = self.database.conn.execute("""
+            MATCH (src:Template_Calculation {name: $name})-[r:TEMPLATE_OUTPUT]->(dst:Template_Data)
+            RETURN DISTINCT dst.name
+        """, parameters={"name": template_name})
+
+        output_nodes = [x[0] for x in output_nodes]
+
+
+        f_data_nodes = [x[0] for x in f_data_nodes]
+
+        f_calculation_nodes.append(template_name)
+        f_data_nodes.extend(output_nodes)
+
+        self.data_nodes = f_data_nodes
+        self.calculation_nodes = f_calculation_nodes
+
+
+        return self
+    
+    def _hash(self) -> str:
+        """Create a unique hash for the template group."""
+        if self.data_nodes is None:
+            raise ValueError("no nodes are store. Cannot calculate hash.")
+        if self.calculation_nodes is None:
+            raise ValueError("no nodes are store. Cannot calculate hash.")
+        
+        combined = "|".join(self.data_nodes + self.calculation_nodes)
+
+
+        # Compute MD5 hash
+        hash_value = hashlib.md5(combined.encode("utf-8")).hexdigest()
+        return hash_value
+
+
+class CalculationBuilder:
+    """Wraps around a set of instance nodes and edges."""
+    
+    def __init__(self, database: Database):
+        self.database = database
+        self.data_nodes: set[str] | None = None
+        self.calculation_nodes : set[str] | None = None
+        self.hash: str | None = None
+
+    def register(self, template_group_name: str, roots: dict[str, str]):
+        # check if roots are correct before moving on.
+        
+        nodes = self.database.conn.execute("""
+                MATCH (tg: Template_Group {name:$template_group})-[r:TEMPLATE_CALCULATION_GROUPS|TEMPLATE_DATA_GROUPS]->(target)
+                RETURN target.name
+            """,
+            parameters = {"template_group": template_group_name})
+        nodes = [row[0] for row in nodes]
+        root_query = """
+            MATCH (n)
+            WHERE n.name IN $nodes
+            AND NOT EXISTS {
+                MATCH (m)-[:TEMPLATE_INPUT|TEMPLATE_OUTPUT]->(n)
+                WHERE m.name IN $nodes
+            }
+            RETURN n.name AS root_name
+        """
+        root_nodes = [row[0] for row in self.database.conn.execute(root_query, parameters={"nodes": nodes})]
+
+        if set(root_nodes) != set(roots.keys()):
+            raise ValueError(f"Wrong roots provided. all roots need to be determined. roots: {set(roots.keys())}; template_roots: {set(root_nodes)}")
+
+
+        if self.data_nodes is None:
+            self.data_nodes = set()
+        
+        if self.calculation_nodes is None:
+            self.calculation_nodes = set()
+
+
+
+        # ------------
+        # Find all calculation in the template
+        calculation_nodes = self.database.conn.execute("""
+                MATCH (tg: Template_Group {name:$template_group})-[r:TEMPLATE_CALCULATION_GROUPS]->(target)
+                RETURN target.name, target.command
+            """,
+            parameters = {"template_group": template_group_name})
+        
+
+
+        # Go through all the calculations
+        data_mapping = {} # {template_name: instance_name}
+        calculation_mapping = {}
+        for c_node_d in list(calculation_nodes):
+            c_node = c_node_d[0]
+            c_node_command = c_node_d[1]
+
+            # Get inputs and output template names
+
+            input_template_name = self.database.conn.execute("""
+                MATCH (inputs: Template_Data)-[r:TEMPLATE_INPUT]->(tg: Template_Calculation {name: $calculation_name})
+                RETURN inputs.name
+            """,
+            parameters = {"calculation_name": c_node})
+            input_template_name = list(input_template_name)
+            output_template_name = self.database.conn.execute("""
+                MATCH (calculation: Template_Calculation {name : $calculation_name})-[r:TEMPLATE_OUTPUT]->(output: Template_Data)
+                RETURN output.name
+            """,
+            parameters = {"calculation_name": c_node})
+            output_template_name = list(output_template_name)
+
+
+            # Create name for the calculation node
+            history_nodes = self.database.conn.execute("""
+                    MATCH (ancestor)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT*]->(target:Template_Calculation {name: $name})
+                    RETURN ancestor.name
+                """,
+                parameters = {"name": c_node})
+            # filter roots by history_nodes
+            history_nodes = list(map(lambda x: x[0], history_nodes))
+            root_subset  = {k: roots[k] for k in history_nodes if k in roots}
+            graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
+            hash_string = graph_string + c_node + json.dumps(root_subset,sort_keys=True) # combine all information to uniquely 
+
+            hash_name_calculation = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
+            calculation_mapping[c_node] = hash_name_calculation
+
+            # create names for the data nodes
+            for data_node in (input_template_name + output_template_name):
+                if data_node[0] not in data_mapping:
+                    history_nodes = self.database.conn.execute("""
+                            MATCH (ancestor)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT*]->(target:Template_Data {name: $name})
+                            RETURN ancestor.name
+                        """,
+                        parameters = {"name": data_node[0]})
+                    history_nodes = list(map(lambda x: x[0], history_nodes))
+                    graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
+                    root_subset  = {k: roots[k] for k in history_nodes if k in roots}
+                    hash_string = graph_string + data_node[0] + json.dumps(root_subset,sort_keys=True) # combine all information to uniquely identify the node
+
+
+                    hash_name = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
+                    data_mapping[data_node[0]] = hash_name      
+
+            # overwrite data_mapping with root_nodes
+            data_mapping.update(roots)
+
+            c_node_command = re.sub(
+                r"(input|output)\((.*?)\)",
+                lambda match: str(data_mapping.get(match.group(2), match.group(0))),
+                c_node_command
+            )
+            
+
+            ## insert link from template to calculation
+            # Insert calculation node
+            self.database.conn.execute("MERGE (:Instance_Calculation {name: $name, command: $command})", parameters = {"name": hash_name_calculation, "command": c_node_command})
+
+            # template -> calculation
+            self.database.conn.execute("""
+                        MATCH (td:Template_Calculation {name:$template_name}), (tc:Instance_Calculation {name:$calculation_name})
+                        MERGE (td)-[r:TEMPLATE_TO_INSTANCE_CALCULATION]->(tc)
+                    """,
+                    parameters = {"template_name": c_node, "calculation_name" : hash_name_calculation})  
+               
+            for inp in input_template_name:
+                # Insert data node
+                self.database.conn.execute("MERGE (:Instance_Data {name: $name})", parameters = {"name": data_mapping[inp[0]]})
+
+                # template -> instance_data
+                self.database.conn.execute("""
+                        MATCH (td:Template_Data {name:$template_name}), (tc:Instance_Data {name:$data_name})
+                        MERGE (td)-[r:TEMPLATE_TO_INSTANCE_DATA]->(tc)
+                    """,
+                    parameters = {"template_name": inp[0], "data_name" : data_mapping[inp[0]]})  
+
+                # instance_data -> instance_calculation
+                self.database.conn.execute("""
+                    MATCH (td:Instance_Data {name:$data}), (tc:Instance_Calculation {name:$calculation})
+                    MERGE (td)-[r:INSTANCE_INPUT]->(tc)
+                """,
+                parameters = {"data": data_mapping[inp[0]], "calculation" : hash_name_calculation})       
+            
+            for inp in output_template_name:
+                self.database.conn.execute("MERGE (:Instance_Data {name: $name})", parameters = {"name": data_mapping[inp[0]]})
+
+                # template -> instance_data
+                self.database.conn.execute("""
+                        MATCH (td:Template_Data {name:$template_name}), (tc:Instance_Data {name:$data_name})
+                        MERGE (td)-[r:TEMPLATE_TO_INSTANCE_DATA]->(tc)
+                    """,
+                    parameters = {"template_name": inp[0], "data_name" : data_mapping[inp[0]]})  
+                
+                # instance_calculation -> instance_data
+                self.database.conn.execute("""
+                    MATCH (td:Instance_Calculation {name:$calculation}), (tc:Instance_Data {name:$data})
+                    MERGE (td)-[r:INSTANCE_OUTPUT]->(tc)
+                """,
+                parameters = {"calculation": hash_name_calculation, "data" : data_mapping[inp[0]]})    
+
+        # Insert all the nodes in order to calulate the hash later
+        self.data_nodes.update(list(data_mapping.values()))
+        self.calculation_nodes.update(list(calculation_mapping.values()))
+
+
+    def commit(self) -> str:
+        
+        if self.data_nodes is None:
+            raise ValueError("no values in the node. No nodes have been registered")
+
+        
+        if self.calculation_nodes is None:
+            raise ValueError("no values in the node. No nodes have been registered")
+
+
+        data_values = tuple(sorted(self.data_nodes))
+        calculation_values = tuple(sorted(self.calculation_nodes))
+        
+        hash_name = hashlib.md5((str(data_values) + str(calculation_values)).encode()).hexdigest()
+
+        self.database.conn.execute("MERGE (:Instance_Group {name: $name})", parameters = {"name": hash_name})
+
+        for i in self.data_nodes:
+            self.database.conn.execute("""
+                    MATCH (td:Instance_Group {name:$instance_group}), (tc:Instance_Data {name:$instance_data})
+                    MERGE (td)-[r:INSTANCE_DATA_GROUPS]->(tc)
+                """,
+                parameters = {"instance_group": hash_name, "instance_data" : i})    
+
+        for i in self.calculation_nodes:
+            self.database.conn.execute("""
+                    MATCH (td:Instance_Group {name:$instance_group}), (tc:Instance_Calculation {name:$instance_calculation})
+                    MERGE (td)-[r:INSTANCE_CALCULATION_GROUPS]->(tc)
+                """,
+                parameters = {"instance_group": hash_name, "instance_calculation" : i})   
+
+        self.hash = hash_name
+        return hash_name
+
+
+class Database:
+
+    def __init__(self, database_path: str | pathlib.Path):
+        """Connect to the database. This objcet provides a pathway to all data."""
+        db = kuzu.Database(database_path)
+        self.conn = kuzu.Connection(db)
+        # Helper to safely create node tables
+        def create_node_table_safe(conn, table_name, schema):
+            try:
+                conn.execute(f"CREATE NODE TABLE {table_name}({schema})")
+            except RuntimeError as e:
+                if "already exists" in str(e):
+                    pass  # ignore if table already exists
+                else:
+                    raise
+
+        def create_rel_table_safe(conn, rel_name, schema):
+            try:
+                conn.execute(f"CREATE REL TABLE {rel_name}({schema})")
+            except RuntimeError as e:
+                if "already exists" in str(e):
+                    pass
+                else:
+                    raise
+
+
+
+        # Node tables
+        # Node tables
+        create_node_table_safe(self.conn, "Template_Data", "name STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Template_Calculation", "name STRING, command STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Template_Group", "name STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Instance_Data", "name STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Instance_Calculation", "name STRING, command STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Instance_Group", "name STRING, PRIMARY KEY(name)")
+
+        # Relationship tables
+        create_rel_table_safe(self.conn, "TEMPLATE_INPUT", "FROM Template_Data TO Template_Calculation")
+        create_rel_table_safe(self.conn, "TEMPLATE_OUTPUT", "FROM Template_Calculation TO Template_Data")
+        create_rel_table_safe(self.conn, "INSTANCE_INPUT", "FROM Instance_Data TO Instance_Calculation")
+        create_rel_table_safe(self.conn, "INSTANCE_OUTPUT", "FROM Instance_Calculation TO Instance_Data")
+        create_rel_table_safe(self.conn, "TEMPLATE_DATA_GROUPS", "FROM Template_Group TO Template_Data")
+        create_rel_table_safe(self.conn, "TEMPLATE_CALCULATION_GROUPS", "FROM Template_Group TO Template_Calculation")
+        create_rel_table_safe(self.conn, "TEMPLATE_TO_INSTANCE_DATA", "FROM Template_Data TO Instance_Data")
+        create_rel_table_safe(self.conn, "TEMPLATE_TO_INSTANCE_CALCULATION", "FROM Template_Calculation TO Instance_Calculation")
+        create_rel_table_safe(self.conn, "INSTANCE_DATA_GROUPS", "FROM Instance_Group TO Instance_Data")
+        create_rel_table_safe(self.conn, "INSTANCE_CALCULATION_GROUPS", "FROM Instance_Group TO Instance_Calculation")
+
+
+    def get_template_builder(self) -> TemplateBuilder:
+        return TemplateBuilder(self)
+
+    def get_calculation_builder(self) -> CalculationBuilder:
+        return CalculationBuilder(self)
+
+
+    # Selection algorithms
+
+    def match_nodes(self, 
+                    calculation_groups: list[str] | str | None = None,
+                    template_nodes: list[str] | str | None = None):
+        """Query by matching the seleced nodes"""
+
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+        if isinstance(template_nodes, str):
+            template_nodes = [template_nodes]
+
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if calculation_groups:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {calculation_groups}")
+
+            if template_nodes:
+                match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+                where_clauses.append(f"tn.name IN {template_nodes}")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT tn.name, n.name"
+            return query
+
+        # Build queries for both node types
+        data_query = build_match("Instance_Data", "Template_Data", "INSTANCE_DATA_GROUPS", 'TEMPLATE_TO_INSTANCE_DATA')
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+
+        query =  f"{data_query} UNION {calc_query}"
+
+        result = self.conn.execute(query)
+        return [[row[0], row[1]] for row in result]
+
+
+    def select_history(
+        self,
+        anchor: str,
+        other_nodes: list[str],
+        calculation_groups: list[str] | str | None = None,
+    ):
+    
+
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if calculation_groups:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {calculation_groups}")
+
+            
+            match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+            where_clauses.append(f"tn.name = '{anchor}'")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT tn.name, n.name"
+            return query
+
+        # Build queries for both node types
+        data_query = build_match("Instance_Data", "Template_Data", "INSTANCE_DATA_GROUPS", 'TEMPLATE_TO_INSTANCE_DATA')
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+
+        query =  f"{data_query} UNION {calc_query}"
+        anchor_instances = self.conn.execute(query)
+        anchor_instances = list(anchor_instances)
+
+        table = []
+        for ai in anchor_instances:
+            
+            rows = self.conn.execute("""
+                MATCH (target:Instance_Data) -[r1:INSTANCE_INPUT|INSTANCE_OUTPUT*]->(anchor:Instance_Data),
+                    (template)-[:TEMPLATE_TO_INSTANCE_DATA]->(target)
+                WHERE template.name IN $other_nodes
+                AND anchor.name = $name
+                RETURN template.name, target.name
+            """,
+            parameters = {"other_nodes": other_nodes, 'name': ai[1]})
+            # Collect results per anchor instance
+            x = {}
+            x[ai[0]] = ai[1]
+            for row in rows:
+                # row[0] = target name, row[1] = template name
+                x[row[0]] = row[1]
+
+            table.append(x)
+
+        return table
+
+
+    def get_commands(
+            self,
+            template_name: str,
+            calculation_groups: list[str] | str | None = None,
+    ):
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if calculation_groups:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {calculation_groups}")
+
+            match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+            where_clauses.append(f"tn.name = '{template_name}'")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT n.name, n.command"
+            return query
+
+        # Build queries for both node types
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+        print(calc_query)
+        query =  f"{calc_query}"
+
+        result = self.conn.execute(query)
+        return [[row[0], row[1]] for row in result]
+        
+
+    def dot_calculations(self,
+                         calculation_groups: list[str] | str | None = None):
+        
+        """construct the graph"""
+
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+        
+        dot_lines = ["digraph G {"]
+        # Query nodes
+
+        nodes = self.conn.execute("MATCH (g:Instance_Group) -[:INSTANCE_DATA_GROUPS|INSTANCE_CALCULATION_GROUPS]-> (n) WHERE g.name IN $groups RETURN n.name", parameters = {"groups": calculation_groups})
+        nodes = list(map(lambda x:x[0], nodes))
+        print(list(nodes))
+        # Query relationships
+        query = """
+        MATCH (a)-[r:INSTANCE_INPUT|INSTANCE_OUTPUT]->(b)
+        WHERE a.name IN $nodes AND b.name IN $nodes
+        RETURN a.name AS source, b.name AS target, r
+        """
+
+        edges = self.conn.execute(query, parameters={"nodes": nodes}).get_as_df()
+        # Add nodes
+        for node in nodes:
+            dot_lines.append(f'  "{node}" [label="{node}"];')
+
+        # Add edges
+        for _, row in edges.iterrows():
+            src = row["source"]
+            dst = row["target"]
+            dot_lines.append(f'  "{src}" -> "{dst}";')
+
+        dot_lines.append("}")
+
+        dot_output = "\n".join(dot_lines)
+        return dot_output
+    
+
+    def dot_template(self, template_name:str):
+        """construct the graph"""
+
+        
+        dot_lines = ["digraph G {"]
+        # Query nodes
+
+        nodes = self.conn.execute("MATCH (g:Template_Group) -[:TEMPLATE_DATA_GROUPS|TEMPLATE_CALCULATION_GROUPS]-> (n) WHERE g.name = $groups RETURN n.name", parameters = {"groups": template_name})
+        nodes = list(map(lambda x:x[0], nodes))
+        print(list(nodes))
+        # Query relationships
+        query = """
+        MATCH (a)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT]->(b)
+        WHERE a.name IN $nodes AND b.name IN $nodes
+        RETURN a.name AS source, b.name AS target, r
+        """
+
+        edges = self.conn.execute(query, parameters={"nodes": nodes}).get_as_df()
+        # Add nodes
+        for node in nodes:
+            dot_lines.append(f'  "{node}" [label="{node}"];')
+
+        # Add edges
+        for _, row in edges.iterrows():
+            src = row["source"]
+            dst = row["target"]
+            dot_lines.append(f'  "{src}" -> "{dst}";')
+
+        dot_lines.append("}")
+
+        dot_output = "\n".join(dot_lines)
+        return dot_output
+    
+
+
+    def as_dot(self):
+        """return the whole database as in dot format"""
+    
+        dot_lines = ["digraph G {"]
+        # Query nodes
+        nodes = self.conn.execute("MATCH (n) RETURN DISTINCT n").get_as_df()
+
+        # Query relationships
+        rels = self.conn.execute("MATCH (a)-[r]->(b) RETURN a, r, b").get_as_df()
+        # Add nodes
+        for _, row in nodes.iterrows():
+            node = row["n"]
+            # Use primary key as identifier
+            label = node["name"]
+            dot_lines.append(f'  "{label}" [label="{label}"];')
+
+        # Add edges
+        for _, row in rels.iterrows():
+            src = row["a"]["name"]
+            dst = row["b"]["name"]
+
+
+            dot_lines.append(f'  "{src}" -> "{dst}";')
+
+        dot_lines.append("}")
+
+        dot_output = "\n".join(dot_lines)
+        return dot_output
+
+
+if __name__ == "__main__":
+    # connect to the database
+    db = Database("persistance_tracker.db")
+
+    # build a template
+    tg = db.get_template_builder()
+    tg.register(f"calc1",f"python3 script.py input(common_input) output(data2)")
+    tg.register(f"calc2",f"python3 script.py input(data2) input(data1) output(data3)")
+    tg.register("calc3", f"input(data3) output(data4)")
+    tg = tg.select_history("calc2")
+    tg_name = tg.commit()
+
+    # build a calculation
+    cg = db.get_calculation_builder()
+    common_input = "mycustomdatanameyay"
+    for i in range(4):
+        cg.register(template_group_name = tg_name, 
+                    roots = {"data1": f"mycustomcooldata{i}",
+                             "common_input": common_input})
+    cg_name1 = cg.commit()
+
+    cg = db.get_calculation_builder()
+    common_input = "mycustomdatanameyay"
+    for i in range(4):
+        cg.register(template_group_name = tg_name, 
+                    roots = {"data1": f"mycustomcooldata{i+10}",
+                             "common_input": common_input})
+    cg_name2 = cg.commit()
+
+    # now connect to calculations for inspection.
+    print("starting query")
+    # Get all data that fits
+
+    # data = db.match_nodes(
+    #     calculation_groups = [cg_name1, cg_name2],
+    #     template_nodes = ["data1", "data2"]
+    # )
+    # print(data)
+
+    # data = db.select_history(
+    #     calculation_groups = [cg_name1],
+    #     anchor = "data3", 
+    #     other_nodes=["data1", "data2"])
+
+    # print(db.dot_calculations(calculation_groups = [cg_name1, cg_name2]))
+
+    # query_builder = db.get_query_builder()
+    # query_builder.filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1", "data2"])
+    # data = query_builder.get_matches()
+
+    # print("starting second query \n\n")
+    # # Get the data in a nice table expanding around an achor node
+    # query_builder = db.get_query_builder()
+    # query_builder.filter_calculation_groups([cg_name1, cg_name2])
+    # table = query_builder.get_histories(anchor = "data3", other_nodes=["data1", "data2"])
+    # print(table)
+
+    commands = db.get_commands(calculation_groups = [cg_name1],template_name="calc2")
+    print(commands)
+
+    print(db.dot_template(tg_name))
+
+
+    exit()
+
+    # print("commands for calculation1")
+    # command_list = cg.get_commands("calc1")
+    # print(command_list)
+    # print("commands for calculation2")
+    # command_list = cg.get_commands("calc2")
+    # print(command_list)
+
+    print(cg.get_table( ["data2", "data1"]))
+
+    
+
+    # break
+    # tg = db.new_template_group()
+    # tg.register("calc1","python3 script.py input(myinput1) output(myoutput1)")
+    # template_id = tg.commit() # commit this template. So that multiple could be used as one.
+
+    # cg = db.new_instance_group()
+    # cg.register(template_id = template_id, {"myinput1": "hi", "myoutput1": "bye"})
+    # cg.register(template_id = template_id, {"myinput1": "hi", "myoutput1": "bye"})
+    # instance_id = cg.commit()
+
+
+    # # Another example, now I want to run a Bayesion optimization loop
+    # ## Create a template
+
+    # db = Database() # Connect to the datbasae
+    # # Create a group of templates - this wil be a template for a workflow
+    # tg = db.new_template_group()
+    # tg.register("calc1","python3 script.py input(myinput1) output(myoutput1)")
+    # tg.register("calc2","python3 script2.py input(myinput2) output(myoutput2)")
+    # tg.register("optimizer","python3 optimizer.py input(optinput) output(optoutput)")
+    # template_id = tg.commit() # commit this template. So that multiple could be used as one.
+
+    # # Create a cluster of instances
+    # cg1 = db.new_instance_group()
+    # for i in range(4):
+    #     # I would like to get a instance so that I could run only that one if I want to.
+    #     cg2 = db.new_instance_group()
+    #     cg2.register(template_id = template_id, {"optinput": "start"})
+    #     cg_name = cg2.commit()
+        
+    #     script = cg2.to_bash() # convert to a basch script (could have other formats)
+    #     run_slurm(script)
+
+    #     # with each iteraciton cg1 changes, so I need to delete the old one.
+    #     cg1.register_instance_group(cg2)
+    #     cg1.delete_and_commit() 
+
+    # # In this case just overwrite what I have done iteratively.
+    # cg_name = cg1.commit()
+
+
+    # # In some other program
+    # db = Database() # Connect to the datbasae
+    # cg = db.get_instance_group(cg_name)
+    # cg.filter_template(["a", "b"]) # select only these templates
+    # print(cg)
+    

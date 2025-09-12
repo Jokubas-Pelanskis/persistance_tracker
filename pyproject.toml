@@ -1,15 +1,15 @@
 [build-system]
-requires = ["maturin>=0.13,<0.15"]
+requires = ["maturin>=0.13"]
 build-backend = "maturin"
 
 [project]
 name = "graphrlib"
 version = "0.1.0"
 description = "Rust + Python combined module"
-authors = ["Jokubas_Pelanskis pelanskis@gmail.com"]
+authors = [{ name = "Jokubas Pelanskis", email = "pelanskis@gmail.com" }]
 readme = "README.md"
 
 [tool.maturin]
 # This tells maturin to include the extra python module
 # relative to the pyproject.toml
-include = ["src/v3*"]
+include = ["graphrlib/*"]
