@@ -280,6 +280,86 @@ class CalculationBuilder:
         return hash_name
 
 
+class QueryBuilder:
+
+    def __init__(self, database):
+        self.database = database
+
+        self.template_nodes: list[str] | None = None
+        self.calculations: list[str] | None = None
+
+    def filter_calculation_groups(self, calculations: list[str] | str) -> QueryBuilder:
+        """Select only specific calculations. If None, then select all"""
+        if self.calculations is None:
+            self.calculations = []
+        if isinstance(calculations, str):
+            calculations = [calculations]
+        self.calculations.extend(calculations)
+
+        return self
+
+    def filter_template_nodes(self, template_nodes: list[str] | str) -> QueryBuilder:
+        """Select specific template"""
+        if self.template_nodes is None:
+            self.template_nodes = []
+        if isinstance(template_nodes, str):
+            template_nodes = [template_nodes]
+        self.template_nodes.extend(template_nodes)
+
+        return self
+
+    def generate_query_string(self):
+        """
+        Generate the query string.
+        Supports filtering Instance_Data and Instance_Calculation nodes by connections.
+        """
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if self.calculations:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {self.calculations}")
+
+            if self.template_nodes:
+                match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+                where_clauses.append(f"tn.name IN {self.template_nodes}")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT tn.name, n.name"
+            return query
+
+        # Build queries for both node types
+        data_query = build_match("Instance_Data", "Template_Data", "INSTANCE_DATA_GROUPS", 'TEMPLATE_TO_INSTANCE_DATA')
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+
+        return f"{data_query} UNION {calc_query}"
+
+
+
+
+    def query_from_string(self, query: str):
+        """Run a query from a raw query string (for reproducibility)."""
+        return self.database.conn.execute(query)
+
+    def run(self):
+        """Build and run the query."""
+        query = self.generate_query_string()
+        result = self.database.conn.execute(query)
+        return [[row[0], row[1]] for row in result]
+
+
+
+
+
+
 class Database:
 
     def __init__(self, database_path: str | pathlib.Path):
@@ -317,8 +397,9 @@ class Database:
     def get_calculation_builder(self) -> CalculationBuilder:
         return CalculationBuilder(self)
 
-    def connect_to_calculation(self, calculations: list[str] | str) -> CalculationQuery:
-        return CalculationQuery(self, calculations)
+    def get_query_builder(self) -> QueryBuilder:
+        return QueryBuilder(self)
+
 
 
     def as_dot(self):
@@ -365,21 +446,29 @@ if __name__ == "__main__":
     # build a calculation
     cg = db.get_calculation_builder()
     common_input = "mycustomdatanameyay"
-    for i in range(2):
+    for i in range(4):
         cg.register(template_group_name = tg_name, 
                     roots = {"data1": f"mycustomcooldata{i}",
                              "common_input": common_input})
-    cg_name = cg.commit()
+    cg_name1 = cg.commit()
+
+    cg = db.get_calculation_builder()
+    common_input = "mycustomdatanameyay"
+    for i in range(4):
+        cg.register(template_group_name = tg_name, 
+                    roots = {"data1": f"mycustomcooldata{i+10}",
+                             "common_input": common_input})
+    cg_name2 = cg.commit()
 
     # now connect to calculations for inspection.
-    calculations = db.connect_to_calculation([cg_name])
+    print("starting query")
+    data = calculations = db.get_query_builder().filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1"]).run()
+    print(data)
 
 
 
-    print(db.as_dot())
+    exit()
 
-
-    exit
     # print("commands for calculation1")
     # command_list = cg.get_commands("calc1")
     # print(command_list)
