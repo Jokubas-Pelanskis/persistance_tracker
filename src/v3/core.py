@@ -310,7 +310,7 @@ class Database:
         self.conn.execute("CREATE REL TABLE INSTANCE_DATA_GROUPS(FROM Instance_Group TO Instance_Data)")
         self.conn.execute("CREATE REL TABLE INSTANCE_CALCULATION_GROUPS(FROM Instance_Group TO Instance_Calculation)")
 
-        
+    
 
     def get_template_builder(self) -> TemplateBuilder:
         return TemplateBuilder(self)
@@ -425,8 +425,47 @@ class Database:
 
             table.append(x)
 
-        print(table)
+        return table
 
+
+    def dot_calculations(self,
+                         calculation_groups: list[str] | str | None = None):
+        
+        """construct the graph"""
+
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+        
+        dot_lines = ["digraph G {"]
+        # Query nodes
+
+        nodes = self.conn.execute("MATCH (g:Instance_Group) -[:INSTANCE_DATA_GROUPS|INSTANCE_CALCULATION_GROUPS]-> (n) WHERE g.name IN $groups RETURN n.name", parameters = {"groups": calculation_groups})
+        nodes = list(map(lambda x:x[0], nodes))
+        print(list(nodes))
+        # Query relationships
+        query = """
+        MATCH (a)-[r:INSTANCE_INPUT|INSTANCE_OUTPUT]->(b)
+        WHERE a.name IN $nodes AND b.name IN $nodes
+        RETURN a.name AS source, b.name AS target, r
+        """
+
+        edges = self.conn.execute(query, parameters={"nodes": nodes}).get_as_df()
+        # Add nodes
+        for node in nodes:
+            dot_lines.append(f'  "{node}" [label="{node}"];')
+
+        # Add edges
+        for _, row in edges.iterrows():
+            src = row["source"]
+            dst = row["target"]
+            dot_lines.append(f'  "{src}" -> "{dst}";')
+
+        dot_lines.append("}")
+
+        dot_output = "\n".join(dot_lines)
+        return dot_output
+    
     def as_dot(self):
         """return the whole database as in dot format"""
     
@@ -471,19 +510,19 @@ if __name__ == "__main__":
     # build a calculation
     cg = db.get_calculation_builder()
     common_input = "mycustomdatanameyay"
-    for i in range(400):
+    for i in range(4):
         cg.register(template_group_name = tg_name, 
                     roots = {"data1": f"mycustomcooldata{i}",
                              "common_input": common_input})
     cg_name1 = cg.commit()
 
-    cg = db.get_calculation_builder()
-    common_input = "mycustomdatanameyay"
-    for i in range(4):
-        cg.register(template_group_name = tg_name, 
-                    roots = {"data1": f"mycustomcooldata{i+10}",
-                             "common_input": common_input})
-    cg_name2 = cg.commit()
+    # cg = db.get_calculation_builder()
+    # common_input = "mycustomdatanameyay"
+    # for i in range(4):
+    #     cg.register(template_group_name = tg_name, 
+    #                 roots = {"data1": f"mycustomcooldata{i+10}",
+    #                          "common_input": common_input})
+    # cg_name2 = cg.commit()
 
     # now connect to calculations for inspection.
     print("starting query")
@@ -496,10 +535,11 @@ if __name__ == "__main__":
     # print(data)
 
     data = db.select_history(
-        calculation_groups = [cg_name1, cg_name2],
+        calculation_groups = [cg_name1],
         anchor = "data3", 
         other_nodes=["data1", "data2"])
 
+    print(db.dot_calculations(calculation_groups = [cg_name1]))
 
     # query_builder = db.get_query_builder()
     # query_builder.filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1", "data2"])
