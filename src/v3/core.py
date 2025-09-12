@@ -114,17 +114,17 @@ class InstanceGroup:
     def __init__(self, database: Database):
         self.database = database
         self.hash : Optional[str] = None
-        self.data_nodes: list[str] | None = None
-        self.calculation_nodes: list[str] | None = None
+        self.data_nodes: set[str] | None = None
+        self.calculation_nodes : set[str] | None = None
 
     def register(self, template_group_name: str, roots: dict[str, str]):
         # check if roots are correct before moving on.
-
+        
         if self.data_nodes is None:
-            self.data_nodes = []
-
+            self.data_nodes = set()
+        
         if self.calculation_nodes is None:
-            self.calculation_nodes = []
+            self.calculation_nodes = set()
 
         # create a string to calculate a hash
         roots_string = json.dumps(roots, sort_keys=True)
@@ -145,7 +145,6 @@ class InstanceGroup:
         for c_node_d in list(calculation_nodes):
             c_node = c_node_d[0]
             c_node_command = c_node_d[1]
-            print(c_node_command)
 
             # Get inputs and output template names
 
@@ -154,11 +153,14 @@ class InstanceGroup:
                 RETURN inputs.name
             """,
             parameters = {"calculation_name": c_node})
+            input_template_name = list(input_template_name)
             output_template_name = self.database.conn.execute("""
                 MATCH (calculation: Template_Calculation {name : $calculation_name})-[r:TEMPLATE_OUTPUT]->(output: Template_Data)
                 RETURN output.name
             """,
             parameters = {"calculation_name": c_node})
+            output_template_name = list(output_template_name)
+
 
             # Create name for the calculation node
             history_nodes = self.database.conn.execute("""
@@ -169,20 +171,12 @@ class InstanceGroup:
             
             graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
             hash_string = graph_string + c_node + roots_string # combine all information to uniquely 
+
             hash_name_calculation = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
             calculation_mapping[c_node] = hash_name_calculation
 
-            ## insert link from template to calculation
-            self.database.conn.execute("MERGE (:Instance_Calculation {name: $name})", parameters = {"name": hash_name_calculation})
-            self.database.conn.execute("""
-                        MATCH (td:Template_Calculation {name:$template_name}), (tc:Instance_Data {name:$calculation_name})
-                        MERGE (td)-[r:TEMPLATE_TO_INSTANCE_CALCULATION]->(tc)
-                    """,
-                    parameters = {"template_name": c_node, "calculation_name" : hash_name_calculation})     
-
-
             # create names for the data nodes
-            for data_node in (list(input_template_name) + list(output_template_name)):
+            for data_node in (input_template_name + output_template_name):
                 if data_node[0] not in data_mapping:
                     history_nodes = self.database.conn.execute("""
                             MATCH (ancestor)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT*]->(target:Template_Data {name: $name})
@@ -191,56 +185,104 @@ class InstanceGroup:
                         parameters = {"name": data_node[0]})
                     graph_string = "|".join(list(map(lambda x:x[0], history_nodes)))
                     hash_string = graph_string + data_node[0] + roots_string # combine all information to uniquely identify the node
+
+
                     hash_name = hashlib.md5((hash_string).encode('utf-8')).hexdigest()
+                    data_mapping[data_node[0]] = hash_name      
 
-                    data_mapping[data_node[0]] = hash_name
+            # overwrite data_mapping with root_nodes
+            data_mapping.update(roots)
 
-                    # Insert a link from template to the instance
-                    self.database.conn.execute("MERGE (:Instance_Data {name: $name})", parameters = {"name": hash_name})
-                    self.database.conn.execute("""
+            c_node_command = re.sub(
+                r"(input|output)\((.*?)\)",
+                lambda match: str(data_mapping.get(match.group(2), match.group(0))),
+                c_node_command
+            )
+            
+
+            ## insert link from template to calculation
+            # Insert calculation node
+            self.database.conn.execute("MERGE (:Instance_Calculation {name: $name, command: $command})", parameters = {"name": hash_name_calculation, "command": c_node_command})
+
+            # template -> calculation
+            self.database.conn.execute("""
+                        MATCH (td:Template_Calculation {name:$template_name}), (tc:Instance_Calculation {name:$calculation_name})
+                        MERGE (td)-[r:TEMPLATE_TO_INSTANCE_CALCULATION]->(tc)
+                    """,
+                    parameters = {"template_name": c_node, "calculation_name" : hash_name_calculation})  
+               
+            for inp in input_template_name:
+                # Insert data node
+                self.database.conn.execute("MERGE (:Instance_Data {name: $name})", parameters = {"name": data_mapping[inp[0]]})
+
+                # template -> instance_data
+                self.database.conn.execute("""
                         MATCH (td:Template_Data {name:$template_name}), (tc:Instance_Data {name:$data_name})
                         MERGE (td)-[r:TEMPLATE_TO_INSTANCE_DATA]->(tc)
                     """,
-                    parameters = {"template_name": data_node[0], "data_name" : hash_name})             
+                    parameters = {"template_name": inp[0], "data_name" : data_mapping[inp[0]]})  
 
-        return
-
-
-
-        # ------------
-
-        # Find all all template nodes under a certain group
-        result = self.database.conn.execute("""
-                MATCH (tg: Template_Group {name:$template_group})-[r:TEMPLATE_DATA_GROUPS]->(target)
-                RETURN target.name
-            """,
-            parameters = {"template_group": template_group_name})
-
-        for node in list(map(lambda x: x[0], result)):
-            # search for all the history nodes
-            r1 = self.database.conn.execute("""
-                    MATCH (ancestor)-[r:TEMPLATE_INPUT|TEMPLATE_OUTPUT*]->(target:Template_Data {name: $name})
-                    RETURN ancestor.name
+                # instance_data -> instance_calculation
+                self.database.conn.execute("""
+                    MATCH (td:Instance_Data {name:$data}), (tc:Instance_Calculation {name:$calculation})
+                    MERGE (td)-[r:INSTANCE_INPUT]->(tc)
                 """,
-                parameters = {"name": node})
+                parameters = {"data": data_mapping[inp[0]], "calculation" : hash_name_calculation})       
             
-            graph_string = "|".join(list(map(lambda x:x[0], r1)))
-            hash_name = hashlib.md5((graph_string + roots_string).encode('utf-8')).hexdigest()
-            
-            # create new nodes
+            for inp in output_template_name:
+                self.database.conn.execute("MERGE (:Instance_Data {name: $name})", parameters = {"name": data_mapping[inp[0]]})
 
-            self.data_nodes.append(hash_name)
-            self.database.conn.execute("MERGE (:Instance_Data {name: $name})", parameters = {"name": hash_name})
-            self.database.conn.execute("""
-                MATCH (td:Template_Data {name:$template_name}), (tc:Instance_Data {name:$data_name})
-                MERGE (td)-[r:TEMPLATE_TO_INSTANCE_DATA]->(tc)
-            """,
-            parameters = {"template_name": node, "data_name" : hash_name})            
+                # template -> instance_data
+                self.database.conn.execute("""
+                        MATCH (td:Template_Data {name:$template_name}), (tc:Instance_Data {name:$data_name})
+                        MERGE (td)-[r:TEMPLATE_TO_INSTANCE_DATA]->(tc)
+                    """,
+                    parameters = {"template_name": inp[0], "data_name" : data_mapping[inp[0]]})  
+                
+                # instance_calculation -> instance_data
+                self.database.conn.execute("""
+                    MATCH (td:Instance_Calculation {name:$calculation}), (tc:Instance_Data {name:$data})
+                    MERGE (td)-[r:INSTANCE_OUTPUT]->(tc)
+                """,
+                parameters = {"calculation": hash_name_calculation, "data" : data_mapping[inp[0]]})    
 
+        # Insert all the nodes in order to calulate the hash later
+        self.data_nodes.update(list(data_mapping.values()))
+        self.calculation_nodes.update(list(calculation_mapping.values()))
 
 
     def commit(self) -> str:
-        pass
+        
+        if self.data_nodes is None:
+            raise ValueError("no values in the node. No nodes have been registered")
+
+        
+        if self.calculation_nodes is None:
+            raise ValueError("no values in the node. No nodes have been registered")
+
+
+        data_values = tuple(sorted(self.data_nodes))
+        calculation_values = tuple(sorted(self.calculation_nodes))
+        
+        hash_name = hashlib.md5((str(data_values) + str(calculation_values)).encode()).hexdigest()
+
+        self.database.conn.execute("MERGE (:Instance_Group {name: $name})", parameters = {"name": hash_name})
+
+        for i in self.data_nodes:
+            self.database.conn.execute("""
+                    MATCH (td:Instance_Group {name:$instance_group}), (tc:Instance_Data {name:$instance_data})
+                    MERGE (td)-[r:INSTANCE_DATA_GROUPS]->(tc)
+                """,
+                parameters = {"instance_group": hash_name, "instance_data" : i})    
+
+        for i in self.calculation_nodes:
+            self.database.conn.execute("""
+                    MATCH (td:Instance_Group {name:$instance_group}), (tc:Instance_Calculation {name:$instance_calculation})
+                    MERGE (td)-[r:INSTANCE_CALCULATION_GROUPS]->(tc)
+                """,
+                parameters = {"instance_group": hash_name, "instance_calculation" : i})   
+
+        return hash_name
 
 
     def get_commands(self, template_name: str):
@@ -266,15 +308,35 @@ class InstanceGroup:
         pass
 
 
+
+    def as_dot(self):
+
+        dot_lines = ["digraph G {"]
+        # Query nodes
+        nodes = self.database.conn.execute("MATCH (n) RETURN DISTINCT n").get_as_df()
+
+        # Query relationships
+        rels = self.database.conn.execute("MATCH (a)-[r]->(b) RETURN a, r, b").get_as_df()
+        # Add nodes
+        for _, row in nodes.iterrows():
+            node = row["n"]
+            # Use primary key as identifier
+            label = node["name"]
+            dot_lines.append(f'  "{label}" [label="{label}"];')
+
+        # Add edges
+        for _, row in rels.iterrows():
+            src = row["a"]["name"]
+            dst = row["b"]["name"]
+
+
+            dot_lines.append(f'  "{src}" -> "{dst}";')
+
+        dot_lines.append("}")
+
+        dot_output = "\n".join(dot_lines)
+        return dot_output
     
-    def _hash(self):
-        """Create a unique hash for the template group."""
-        import hashlib
-        # Create a sorted representation of the graph
-        nodes = sorted(self.graph.nodes)
-        edges = sorted((u, v) for u, v in self.graph.edges)
-        representation = str(nodes) + str(edges)
-        return hashlib.md5(representation.encode()).hexdigest()
 
 class Database:
 
@@ -300,7 +362,11 @@ class Database:
         self.conn.execute("CREATE REL TABLE TEMPLATE_CALCULATION_GROUPS(FROM Template_Group TO Template_Calculation)")
 
         self.conn.execute("CREATE REL TABLE TEMPLATE_TO_INSTANCE_DATA(FROM Template_Data TO Instance_Data)")
-        self.conn.execute("CREATE REL TABLE TEMPLATE_TO_INSTANCE_CALCULATION(FROM Template_Data TO Instance_Calculation)")
+        self.conn.execute("CREATE REL TABLE TEMPLATE_TO_INSTANCE_CALCULATION(FROM Template_Calculation TO Instance_Calculation)")
+
+        self.conn.execute("CREATE REL TABLE INSTANCE_DATA_GROUPS(FROM Instance_Group TO Instance_Data)")
+        self.conn.execute("CREATE REL TABLE INSTANCE_CALCULATION_GROUPS(FROM Instance_Group TO Instance_Calculation)")
+
         
 
     def new_template_group(self) -> TemplateGroup:
@@ -358,13 +424,13 @@ if __name__ == "__main__":
 
     # now create some calculations
     cg = db.new_instance_group()
-    common_input = "hello"
-    for i in range(4):
+    common_input = "mycustomdatanameyay"
+    for i in range(2):
         cg.register(template_group_name = tg_name, roots = {"data1": f"mycustomcooldata{i}",
                                                             "common_input": common_input})
+    cg_name = cg.commit()
     print(db.as_dot())
     exit
-    cg_name = cg.commit()
     # print("commands for calculation1")
     # command_list = cg.get_commands("calc1")
     # print(command_list)
