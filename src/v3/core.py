@@ -311,30 +311,48 @@ class Database:
         """Connect to the database. This objcet provides a pathway to all data."""
         db = kuzu.Database(database_path)
         self.conn = kuzu.Connection(db)
-        self.conn.execute("CREATE NODE TABLE Template_Data(name STRING, PRIMARY KEY(name))")
-        self.conn.execute("CREATE NODE TABLE Template_Calculation(name STRING, command STRING, PRIMARY KEY(name))")
-        self.conn.execute("CREATE NODE TABLE Template_Group(name STRING, PRIMARY KEY(name))")
-        self.conn.execute("CREATE NODE TABLE Instance_Data(name STRING, PRIMARY KEY(name))")
-        self.conn.execute("CREATE NODE TABLE Instance_Calculation(name STRING, command STRING, PRIMARY KEY(name))")
-        self.conn.execute("CREATE NODE TABLE Instance_Group(name STRING, PRIMARY KEY(name))")
+        # Helper to safely create node tables
+        def create_node_table_safe(conn, table_name, schema):
+            try:
+                conn.execute(f"CREATE NODE TABLE {table_name}({schema})")
+            except RuntimeError as e:
+                if "already exists" in str(e):
+                    pass  # ignore if table already exists
+                else:
+                    raise
+
+        def create_rel_table_safe(conn, rel_name, schema):
+            try:
+                conn.execute(f"CREATE REL TABLE {rel_name}({schema})")
+            except RuntimeError as e:
+                if "already exists" in str(e):
+                    pass
+                else:
+                    raise
 
 
-        self.conn.execute("CREATE REL TABLE TEMPLATE_INPUT(FROM Template_Data TO Template_Calculation)")
-        self.conn.execute("CREATE REL TABLE TEMPLATE_OUTPUT(FROM Template_Calculation TO Template_Data)")
 
-        self.conn.execute("CREATE REL TABLE INSTANCE_INPUT(FROM Instance_Data TO Instance_Calculation)")
-        self.conn.execute("CREATE REL TABLE INSTANCE_OUTPUT(FROM Instance_Calculation TO Instance_Data)")
+        # Node tables
+        # Node tables
+        create_node_table_safe(self.conn, "Template_Data", "name STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Template_Calculation", "name STRING, command STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Template_Group", "name STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Instance_Data", "name STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Instance_Calculation", "name STRING, command STRING, PRIMARY KEY(name)")
+        create_node_table_safe(self.conn, "Instance_Group", "name STRING, PRIMARY KEY(name)")
 
-        self.conn.execute("CREATE REL TABLE TEMPLATE_DATA_GROUPS(FROM Template_Group TO Template_Data)")
-        self.conn.execute("CREATE REL TABLE TEMPLATE_CALCULATION_GROUPS(FROM Template_Group TO Template_Calculation)")
+        # Relationship tables
+        create_rel_table_safe(self.conn, "TEMPLATE_INPUT", "FROM Template_Data TO Template_Calculation")
+        create_rel_table_safe(self.conn, "TEMPLATE_OUTPUT", "FROM Template_Calculation TO Template_Data")
+        create_rel_table_safe(self.conn, "INSTANCE_INPUT", "FROM Instance_Data TO Instance_Calculation")
+        create_rel_table_safe(self.conn, "INSTANCE_OUTPUT", "FROM Instance_Calculation TO Instance_Data")
+        create_rel_table_safe(self.conn, "TEMPLATE_DATA_GROUPS", "FROM Template_Group TO Template_Data")
+        create_rel_table_safe(self.conn, "TEMPLATE_CALCULATION_GROUPS", "FROM Template_Group TO Template_Calculation")
+        create_rel_table_safe(self.conn, "TEMPLATE_TO_INSTANCE_DATA", "FROM Template_Data TO Instance_Data")
+        create_rel_table_safe(self.conn, "TEMPLATE_TO_INSTANCE_CALCULATION", "FROM Template_Calculation TO Instance_Calculation")
+        create_rel_table_safe(self.conn, "INSTANCE_DATA_GROUPS", "FROM Instance_Group TO Instance_Data")
+        create_rel_table_safe(self.conn, "INSTANCE_CALCULATION_GROUPS", "FROM Instance_Group TO Instance_Calculation")
 
-        self.conn.execute("CREATE REL TABLE TEMPLATE_TO_INSTANCE_DATA(FROM Template_Data TO Instance_Data)")
-        self.conn.execute("CREATE REL TABLE TEMPLATE_TO_INSTANCE_CALCULATION(FROM Template_Calculation TO Instance_Calculation)")
-
-        self.conn.execute("CREATE REL TABLE INSTANCE_DATA_GROUPS(FROM Instance_Group TO Instance_Data)")
-        self.conn.execute("CREATE REL TABLE INSTANCE_CALCULATION_GROUPS(FROM Instance_Group TO Instance_Calculation)")
-
-    
 
     def get_template_builder(self) -> TemplateBuilder:
         return TemplateBuilder(self)
@@ -343,6 +361,7 @@ class Database:
         return CalculationBuilder(self)
 
 
+    # Selection algorithms
 
     def match_nodes(self, 
                     calculation_groups: list[str] | str | None = None,
@@ -452,6 +471,45 @@ class Database:
         return table
 
 
+    def get_commands(
+            self,
+            template_name: str,
+            calculation_groups: list[str] | str | None = None,
+    ):
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if calculation_groups:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {calculation_groups}")
+
+            match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+            where_clauses.append(f"tn.name = '{template_name}'")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT n.name, n.command"
+            return query
+
+        # Build queries for both node types
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+        print(calc_query)
+        query =  f"{calc_query}"
+
+        result = self.conn.execute(query)
+        return [[row[0], row[1]] for row in result]
+        
+
     def dot_calculations(self,
                          calculation_groups: list[str] | str | None = None):
         
@@ -490,6 +548,7 @@ class Database:
         dot_output = "\n".join(dot_lines)
         return dot_output
     
+
     def as_dot(self):
         """return the whole database as in dot format"""
     
@@ -518,7 +577,6 @@ class Database:
 
         dot_output = "\n".join(dot_lines)
         return dot_output
-
 
 
 if __name__ == "__main__":
@@ -558,12 +616,12 @@ if __name__ == "__main__":
     # )
     # print(data)
 
-    data = db.select_history(
-        calculation_groups = [cg_name1],
-        anchor = "data3", 
-        other_nodes=["data1", "data2"])
+    # data = db.select_history(
+    #     calculation_groups = [cg_name1],
+    #     anchor = "data3", 
+    #     other_nodes=["data1", "data2"])
 
-    print(db.dot_calculations(calculation_groups = [cg_name1, cg_name2]))
+    # print(db.dot_calculations(calculation_groups = [cg_name1, cg_name2]))
 
     # query_builder = db.get_query_builder()
     # query_builder.filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1", "data2"])
@@ -576,7 +634,8 @@ if __name__ == "__main__":
     # table = query_builder.get_histories(anchor = "data3", other_nodes=["data1", "data2"])
     # print(table)
 
-
+    commands = db.get_commands(calculation_groups = [cg_name1],template_name="calc2")
+    print(commands)
 
     exit()
 
