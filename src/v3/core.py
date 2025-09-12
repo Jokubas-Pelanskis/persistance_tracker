@@ -1,14 +1,15 @@
 from __future__ import annotations
-import sqlite3
+
 import pathlib
 from copy import deepcopy
 import re
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 import re
-import networkx as nx
 import kuzu
 import json
+import pandas as pd
+
 DB_PATH = "persistance_tracker.db"
 
 
@@ -280,86 +281,6 @@ class CalculationBuilder:
         return hash_name
 
 
-class QueryBuilder:
-
-    def __init__(self, database):
-        self.database = database
-
-        self.template_nodes: list[str] | None = None
-        self.calculations: list[str] | None = None
-
-    def filter_calculation_groups(self, calculations: list[str] | str) -> QueryBuilder:
-        """Select only specific calculations. If None, then select all"""
-        if self.calculations is None:
-            self.calculations = []
-        if isinstance(calculations, str):
-            calculations = [calculations]
-        self.calculations.extend(calculations)
-
-        return self
-
-    def filter_template_nodes(self, template_nodes: list[str] | str) -> QueryBuilder:
-        """Select specific template"""
-        if self.template_nodes is None:
-            self.template_nodes = []
-        if isinstance(template_nodes, str):
-            template_nodes = [template_nodes]
-        self.template_nodes.extend(template_nodes)
-
-        return self
-
-    def generate_query_string(self):
-        """
-        Generate the query string.
-        Supports filtering Instance_Data and Instance_Calculation nodes by connections.
-        """
-
-        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
-            query = f"MATCH (n:{instance_node}), "
-            match_clauses = []
-            where_clauses = []
-
-            if self.calculations:
-                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
-                where_clauses.append(f"g.name IN {self.calculations}")
-
-            if self.template_nodes:
-                match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
-                where_clauses.append(f"tn.name IN {self.template_nodes}")
-
-            if match_clauses:
-                query += ", ".join(match_clauses) + " "
-
-            if where_clauses:
-                query += "WHERE " + " AND ".join(where_clauses) + " "
-
-            query += "RETURN DISTINCT tn.name, n.name"
-            return query
-
-        # Build queries for both node types
-        data_query = build_match("Instance_Data", "Template_Data", "INSTANCE_DATA_GROUPS", 'TEMPLATE_TO_INSTANCE_DATA')
-        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
-
-        return f"{data_query} UNION {calc_query}"
-
-
-
-
-    def query_from_string(self, query: str):
-        """Run a query from a raw query string (for reproducibility)."""
-        return self.database.conn.execute(query)
-
-    def run(self):
-        """Build and run the query."""
-        query = self.generate_query_string()
-        result = self.database.conn.execute(query)
-        return [[row[0], row[1]] for row in result]
-
-
-
-
-
-
 class Database:
 
     def __init__(self, database_path: str | pathlib.Path):
@@ -397,10 +318,114 @@ class Database:
     def get_calculation_builder(self) -> CalculationBuilder:
         return CalculationBuilder(self)
 
-    def get_query_builder(self) -> QueryBuilder:
-        return QueryBuilder(self)
 
 
+    def match_nodes(self, 
+                    calculation_groups: list[str] | str | None = None,
+                    template_nodes: list[str] | str | None = None):
+        """Query by matching the seleced nodes"""
+
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+        if isinstance(template_nodes, str):
+            template_nodes = [template_nodes]
+
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if calculation_groups:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {calculation_groups}")
+
+            if template_nodes:
+                match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+                where_clauses.append(f"tn.name IN {template_nodes}")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT tn.name, n.name"
+            return query
+
+        # Build queries for both node types
+        data_query = build_match("Instance_Data", "Template_Data", "INSTANCE_DATA_GROUPS", 'TEMPLATE_TO_INSTANCE_DATA')
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+
+        query =  f"{data_query} UNION {calc_query}"
+
+        result = self.conn.execute(query)
+        return [[row[0], row[1]] for row in result]
+
+
+    def select_history(
+        self,
+        anchor: str,
+        other_nodes: list[str],
+        calculation_groups: list[str] | str | None = None,
+    ):
+    
+
+        if isinstance(calculation_groups, str):
+            calculation_groups = [calculation_groups]
+
+        def build_match(instance_node: str,template_node, instance_group_to_instance, template_to_instance):
+            query = f"MATCH (n:{instance_node}), "
+            match_clauses = []
+            where_clauses = []
+
+            if calculation_groups:
+                match_clauses.append(f"(g:Instance_Group)-[:{instance_group_to_instance}]->(n)")
+                where_clauses.append(f"g.name IN {calculation_groups}")
+
+            
+            match_clauses.append(f"(tn:{template_node})-[:{template_to_instance}]->(n)")
+            where_clauses.append(f"tn.name = '{anchor}'")
+
+            if match_clauses:
+                query += ", ".join(match_clauses) + " "
+
+            if where_clauses:
+                query += "WHERE " + " AND ".join(where_clauses) + " "
+
+            query += "RETURN DISTINCT tn.name, n.name"
+            return query
+
+        # Build queries for both node types
+        data_query = build_match("Instance_Data", "Template_Data", "INSTANCE_DATA_GROUPS", 'TEMPLATE_TO_INSTANCE_DATA')
+        calc_query = build_match("Instance_Calculation", "Template_Calculation","INSTANCE_CALCULATION_GROUPS", "TEMPLATE_TO_INSTANCE_CALCULATION")
+
+        query =  f"{data_query} UNION {calc_query}"
+        anchor_instances = self.conn.execute(query)
+        anchor_instances = list(anchor_instances)
+
+        table = []
+        for ai in anchor_instances:
+            
+            rows = self.conn.execute("""
+                MATCH (target:Instance_Data) -[r1:INSTANCE_INPUT|INSTANCE_OUTPUT*]->(anchor:Instance_Data),
+                    (template)-[:TEMPLATE_TO_INSTANCE_DATA]->(target)
+                WHERE template.name IN $other_nodes
+                AND anchor.name = $name
+                RETURN template.name, target.name
+            """,
+            parameters = {"other_nodes": other_nodes, 'name': ai[1]})
+            # Collect results per anchor instance
+            x = {}
+            x[ai[0]] = ai[1]
+            for row in rows:
+                # row[0] = target name, row[1] = template name
+                x[row[0]] = row[1]
+
+            table.append(x)
+
+        print(table)
 
     def as_dot(self):
         """return the whole database as in dot format"""
@@ -446,7 +471,7 @@ if __name__ == "__main__":
     # build a calculation
     cg = db.get_calculation_builder()
     common_input = "mycustomdatanameyay"
-    for i in range(4):
+    for i in range(400):
         cg.register(template_group_name = tg_name, 
                     roots = {"data1": f"mycustomcooldata{i}",
                              "common_input": common_input})
@@ -462,8 +487,30 @@ if __name__ == "__main__":
 
     # now connect to calculations for inspection.
     print("starting query")
-    data = calculations = db.get_query_builder().filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1"]).run()
-    print(data)
+    # Get all data that fits
+
+    # data = db.match_nodes(
+    #     calculation_groups = [cg_name1, cg_name2],
+    #     template_nodes = ["data1", "data2"]
+    # )
+    # print(data)
+
+    data = db.select_history(
+        calculation_groups = [cg_name1, cg_name2],
+        anchor = "data3", 
+        other_nodes=["data1", "data2"])
+
+
+    # query_builder = db.get_query_builder()
+    # query_builder.filter_calculation_groups([cg_name1, cg_name2]).filter_template_nodes(["data1", "data2"])
+    # data = query_builder.get_matches()
+
+    # print("starting second query \n\n")
+    # # Get the data in a nice table expanding around an achor node
+    # query_builder = db.get_query_builder()
+    # query_builder.filter_calculation_groups([cg_name1, cg_name2])
+    # table = query_builder.get_histories(anchor = "data3", other_nodes=["data1", "data2"])
+    # print(table)
 
 
 
