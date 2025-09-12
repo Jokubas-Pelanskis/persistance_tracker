@@ -1,0 +1,9 @@
+- v1:
+    - json database; the whole database is read at onec
+    - names based on timestamp - expensive merging (scales with NM, N - size of the database, M - size of the current graph)
+- v2:
+    - sqlite databese - only necessary data is read in.
+    - hash names. Merging trivial and cheap (just need to compute the hashes, no merging needed.)
+- v3:
+    - Kuzu database
+    - hash names
