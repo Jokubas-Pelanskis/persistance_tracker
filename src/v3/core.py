@@ -12,12 +12,11 @@ import json
 DB_PATH = "persistance_tracker.db"
 
 
-class TemplateGroup:
+class TemplateBuilder:
     """Wraps around a set of templates nodes and edges."""
 
     def __init__(self, database: Database):
         self.database = database
-        self.hash : Optional[str] = None
         self.data_nodes: list[str] | None = None
         self.calculation_nodes: list[str] | None = None
 
@@ -61,7 +60,6 @@ class TemplateGroup:
         self.data_nodes.extend(inputs)
         self.data_nodes.extend(outputs)
 
-
     def commit(self) -> str:
         """
         Commit the template group to the database.
@@ -102,20 +100,16 @@ class TemplateGroup:
         # Compute MD5 hash
         hash_value = hashlib.md5(combined.encode("utf-8")).hexdigest()
         return hash_value
-    
-
-    def as_dot(self) -> str:
-        pass
 
 
-class InstanceGroup:
+class CalculationBuilder:
     """Wraps around a set of instance nodes and edges."""
     
     def __init__(self, database: Database):
         self.database = database
-        self.hash : Optional[str] = None
         self.data_nodes: set[str] | None = None
         self.calculation_nodes : set[str] | None = None
+        self.hash: str | None = None
 
     def register(self, template_group_name: str, roots: dict[str, str]):
         # check if roots are correct before moving on.
@@ -282,61 +276,9 @@ class InstanceGroup:
                 """,
                 parameters = {"instance_group": hash_name, "instance_calculation" : i})   
 
+        self.hash = hash_name
         return hash_name
 
-
-    def get_commands(self, template_name: str):
-        """Get all the commands for a certain template name"""
-
-
-
-
-    def get_table(self, columns: list[str] | str):
-        """
-        gets calculation names as a table, where each row corresponds to a unique path through the diagram.
-        """
-
-
-    def register_instance_group(self, instance_group: InstanceGroup):
-        pass
-
-    def delete_and_commit(self):
-        pass
-
-
-    def filter_template(self, template_names: list[str]):
-        pass
-
-
-
-    def as_dot(self):
-
-        dot_lines = ["digraph G {"]
-        # Query nodes
-        nodes = self.database.conn.execute("MATCH (n) RETURN DISTINCT n").get_as_df()
-
-        # Query relationships
-        rels = self.database.conn.execute("MATCH (a)-[r]->(b) RETURN a, r, b").get_as_df()
-        # Add nodes
-        for _, row in nodes.iterrows():
-            node = row["n"]
-            # Use primary key as identifier
-            label = node["name"]
-            dot_lines.append(f'  "{label}" [label="{label}"];')
-
-        # Add edges
-        for _, row in rels.iterrows():
-            src = row["a"]["name"]
-            dst = row["b"]["name"]
-
-
-            dot_lines.append(f'  "{src}" -> "{dst}";')
-
-        dot_lines.append("}")
-
-        dot_output = "\n".join(dot_lines)
-        return dot_output
-    
 
 class Database:
 
@@ -369,14 +311,15 @@ class Database:
 
         
 
-    def new_template_group(self) -> TemplateGroup:
-        return TemplateGroup(self)
+    def get_template_builder(self) -> TemplateBuilder:
+        return TemplateBuilder(self)
 
-    def new_instance_group(self) -> InstanceGroup:
-        return InstanceGroup(self)
+    def get_calculation_builder(self) -> CalculationBuilder:
+        return CalculationBuilder(self)
 
-    def get_instance_group(self, instance_group_id: list[str] | str) -> InstanceGroup:
-        pass
+    def connect_to_calculation(self, calculations: list[str] | str) -> CalculationQuery:
+        return CalculationQuery(self, calculations)
+
 
     def as_dot(self):
         """return the whole database as in dot format"""
@@ -413,23 +356,29 @@ if __name__ == "__main__":
     # connect to the database
     db = Database("persistance_tracker.db")
 
-    
-    tg = db.new_template_group()
+    # build a template
+    tg = db.get_template_builder()
     tg.register(f"calc1",f"python3 script.py input(common_input) output(data2)")
     tg.register(f"calc2",f"python3 script.py input(data2) input(data1) output(data3)")
-
-    # for i in range(1000):
-    #     tg.register(f"calc{i}",f"python3 script.py input(data{i}) output(data{i+1})")
     tg_name = tg.commit()
 
-    # now create some calculations
-    cg = db.new_instance_group()
+    # build a calculation
+    cg = db.get_calculation_builder()
     common_input = "mycustomdatanameyay"
     for i in range(2):
-        cg.register(template_group_name = tg_name, roots = {"data1": f"mycustomcooldata{i}",
-                                                            "common_input": common_input})
+        cg.register(template_group_name = tg_name, 
+                    roots = {"data1": f"mycustomcooldata{i}",
+                             "common_input": common_input})
     cg_name = cg.commit()
+
+    # now connect to calculations for inspection.
+    calculations = db.connect_to_calculation([cg_name])
+
+
+
     print(db.as_dot())
+
+
     exit
     # print("commands for calculation1")
     # command_list = cg.get_commands("calc1")
